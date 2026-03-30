@@ -18,7 +18,7 @@ const PROJECT_URL = process.env.PROJECT_URL || '';
 const AUTO_ACCESS = process.env.AUTO_ACCESS === 'true';
 const YT_WARPOUT = process.env.YT_WARPOUT === 'true';
 const FILE_PATH = process.env.FILE_PATH || '.cache';
-const SUB_PATH = process.env.SUB_PATH || 'sub';
+const SUB_PATH = process.env.SUB_PATH || 'subb';
 const UUID = process.env.UUID || '0a6568ff-ea3c-4271-9020-450560e10d63';
 const NEZHA_SERVER = process.env.NEZHA_SERVER || '';
 const NEZHA_PORT = process.env.NEZHA_PORT || '';
@@ -31,10 +31,11 @@ const ARGO_PORT = process.env.ARGO_PORT || 8001;
 const S5_PORT = process.env.S5_PORT || '';
 const TUIC_PORT = process.env.TUIC_PORT || '';
 const HY2_PORT = process.env.HY2_PORT || '';
+const HY2_OBFS = process.env.HY2_OBFS || 'false';
 const ANYTLS_PORT = process.env.ANYTLS_PORT || '';
 const REALITY_PORT = process.env.REALITY_PORT || '';
 const ANYREALITY_PORT = process.env.ANYREALITY_PORT || '';
-const CFIP = process.env.CFIP || 'saas.sin.fan';
+const CFIP = process.env.CFIP || 'sub.danfeng.eu.org';
 const CFPORT = process.env.CFPORT || 443;
 const PORT = process.env.PORT || 3000;
 const NAME = process.env.NAME || '';
@@ -42,8 +43,6 @@ const CHAT_ID = process.env.CHAT_ID || '';
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const DISABLE_ARGO = process.env.DISABLE_ARGO === 'true';
 const REALITY_DOMAIN = process.env.REALITY_DOMAIN || 'www.iij.ad.jp';
-
-// Custom Certificate Variables
 const DOMAIN_NAME = process.env.DOMAIN_NAME || '';
 const DOMAIN_CERT = process.env.DOMAIN_CERT || '';
 const DOMAIN_KEY = process.env.DOMAIN_KEY || '';
@@ -62,6 +61,7 @@ let publicKey = '';
 let shortId = '';
 let tuicPassword = '';
 let socksPassword = '';
+let hy2Password = ''; // Password for Salamander Obfuscation
 let useCustomCert = false;
 let domainName = '';
 
@@ -299,7 +299,16 @@ async function downloadFilesAndRun() {
         shortId = data.shortId;
         tuicPassword = data.tuicPassword;
         socksPassword = data.socksPassword;
+        hy2Password = data.hy2Password || crypto.randomBytes(16).toString('hex');
         needGenerate = false;
+        
+        // Backward compatibility: Resave to store generated hy2Password if it was missing
+        if (!data.hy2Password) {
+            fs.writeFileSync(persistFile, JSON.stringify({
+                privateKey, publicKey, shortId, tuicPassword, socksPassword, hy2Password
+            }));
+        }
+        
         console.log("Successfully loaded persisted keys and passwords.");
       }
     } catch (e) {
@@ -326,9 +335,10 @@ async function downloadFilesAndRun() {
       shortId = crypto.randomBytes(4).toString('hex');
       tuicPassword = crypto.randomBytes(16).toString('hex');
       socksPassword = crypto.randomBytes(8).toString('hex');
+      hy2Password = crypto.randomBytes(16).toString('hex');
 
       fs.writeFileSync(persistFile, JSON.stringify({
-        privateKey, publicKey, shortId, tuicPassword, socksPassword
+        privateKey, publicKey, shortId, tuicPassword, socksPassword, hy2Password
       }));
     } catch (err) {
       console.error(`Error generating keypair: ${err.message}`);
@@ -455,7 +465,7 @@ uuid: ${UUID}`;
           download_detour: "direct"
         }
       ],
-      rules: [{ rule_set: ["openai", "netflix"], outbound: "wireguard-out" }],
+      rules: [{ rule_set:["openai", "netflix"], outbound: "wireguard-out" }],
       final: "direct"
     }
   };
@@ -468,25 +478,29 @@ uuid: ${UUID}`;
         enabled: true, server_name: REALITY_DOMAIN,
         reality: {
           enabled: true, handshake: { server: REALITY_DOMAIN, server_port: 443 },
-          private_key: privateKey, short_id: [shortId]
+          private_key: privateKey, short_id:[shortId]
         }
       }
     });
   }
 
   if (isValidPort(HY2_PORT)) {
-    config.inbounds.push({
+    const hyConf = {
       tag: "hysteria-in", type: "hysteria2", listen: "::", listen_port: parseInt(HY2_PORT, 10),
       users: [{ password: UUID }],
       masquerade: "https://www.bing.com",
       tls: { enabled: true, certificate_path: certPath, key_path: keyPath }
-    });
+    };
+    if (HY2_OBFS) {
+      hyConf.obfs = { type: "salamander", password: hy2Password };
+    }
+    config.inbounds.push(hyConf);
   }
 
   if (isValidPort(TUIC_PORT)) {
     config.inbounds.push({
       tag: "tuic-in", type: "tuic", listen: "::", listen_port: parseInt(TUIC_PORT, 10),
-      users: [{ uuid: UUID, password: tuicPassword }],
+      users:[{ uuid: UUID, password: tuicPassword }],
       congestion_control: "bbr",
       tls: { enabled: true, alpn: ["h3"], certificate_path: certPath, key_path: keyPath }
     });
@@ -495,7 +509,7 @@ uuid: ${UUID}`;
   if (isValidPort(S5_PORT)) {
     config.inbounds.push({
       tag: "s5-in", type: "socks", listen: "::", listen_port: parseInt(S5_PORT, 10),
-      users: [{ username: UUID.substring(0, 8), password: socksPassword }]
+      users:[{ username: UUID.substring(0, 8), password: socksPassword }]
     });
   }
 
@@ -699,7 +713,11 @@ async function generateLinks(argoDomain) {
 
     if (isValidPort(HY2_PORT)) {
       const insecureFlag = useCustomCert ? "" : "&insecure=1";
-      subTxt += `\nhysteria2://${UUID}@${SERVER_IP}:${HY2_PORT}/?sni=${domainName}&obfs=none${insecureFlag}#${nodeName}`;
+      if (HY2_OBFS) {
+        subTxt += `\nhysteria2://${UUID}@${SERVER_IP}:${HY2_PORT}/?sni=${domainName}&obfs=salamander&obfs-password=${hy2Password}${insecureFlag}#${nodeName}`;
+      } else {
+        subTxt += `\nhysteria2://${UUID}@${SERVER_IP}:${HY2_PORT}/?sni=${domainName}&obfs=none${insecureFlag}#${nodeName}`;
+      }
     }
 
     if (isValidPort(REALITY_PORT)) {
@@ -773,7 +791,7 @@ async function sendTelegram() {
 async function uploadNodes() {
   if (UPLOAD_URL && PROJECT_URL) {
     try {
-      await axios.post(`${UPLOAD_URL}/api/add-subscriptions`, { subscription: [`${PROJECT_URL}/${SUB_PATH}`] }, { headers: { 'Content-Type': 'application/json' }});
+      await axios.post(`${UPLOAD_URL}/api/add-subscriptions`, { subscription:[`${PROJECT_URL}/${SUB_PATH}`] }, { headers: { 'Content-Type': 'application/json' }});
     } catch (e) {}
   } else if (UPLOAD_URL) {
     if (!fs.existsSync(listPath)) return;
