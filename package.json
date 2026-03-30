@@ -1,0 +1,19 @@
+{
+  "name": "sbkojs",
+  "version": "0.0.1",
+  "description": "sbjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "latest",
+    "dotenv": "latest",
+    "express": "latest"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
+  
+
