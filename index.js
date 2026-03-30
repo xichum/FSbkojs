@@ -28,6 +28,7 @@ const KOMARI_KEY = process.env.KOMARI_KEY || '';
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
 const ARGO_AUTH = process.env.ARGO_AUTH || '';
 const ARGO_PORT = process.env.ARGO_PORT || 8001;
+const ARGO_VMESS_PORT = parseInt(ARGO_PORT, 10) + 1;
 const S5_PORT = process.env.S5_PORT || '';
 const TUIC_PORT = process.env.TUIC_PORT || '';
 const HY2_PORT = process.env.HY2_PORT || '';
@@ -61,7 +62,7 @@ let publicKey = '';
 let shortId = '';
 let tuicPassword = '';
 let socksPassword = '';
-let hy2Password = ''; // Password for Salamander Obfuscation
+let hy2Password = '';
 let useCustomCert = false;
 let domainName = '';
 
@@ -163,7 +164,13 @@ protocol: http2
 
 ingress:
   - hostname: ${ARGO_DOMAIN}
+    path: /vless-argo
     service: http://localhost:${ARGO_PORT}
+    originRequest:
+      noTLSVerify: true
+  - hostname: ${ARGO_DOMAIN}
+    path: /vmess-argo
+    service: http://localhost:${ARGO_VMESS_PORT}
     originRequest:
       noTLSVerify: true
   - service: http_status:404
@@ -302,7 +309,6 @@ async function downloadFilesAndRun() {
         hy2Password = data.hy2Password || crypto.randomBytes(16).toString('hex');
         needGenerate = false;
         
-        // Backward compatibility: Resave to store generated hy2Password if it was missing
         if (!data.hy2Password) {
             fs.writeFileSync(persistFile, JSON.stringify({
                 privateKey, publicKey, shortId, tuicPassword, socksPassword, hy2Password
@@ -331,7 +337,6 @@ async function downloadFilesAndRun() {
         return;
       }
 
-      // Generate Random Hex strings: 8 chars, 32 chars, 16 chars
       shortId = crypto.randomBytes(4).toString('hex');
       tuicPassword = crypto.randomBytes(16).toString('hex');
       socksPassword = crypto.randomBytes(8).toString('hex');
@@ -346,7 +351,6 @@ async function downloadFilesAndRun() {
     }
   }
 
-  // Certificate Handling
   let certPath = path.join(FILE_PATH, 'tls_cert.pem');
   let keyPath = path.join(FILE_PATH, 'tls_private.key');
   domainName = DOMAIN_NAME || "www.bing.com";
@@ -384,7 +388,6 @@ async function downloadFilesAndRun() {
     }
   }
 
-  // Nezha Agent Config
   const portSegment = NEZHA_SERVER.includes(':') ? NEZHA_SERVER.split(':').pop() : '';
   const tlsPorts = new Set(['443', '8443', '2096', '2087', '2083', '2053']);
   const nezhatls = tlsPorts.has(portSegment) ? 'true' : 'false';
@@ -418,10 +421,22 @@ uuid: ${UUID}`;
     log: { disabled: true, level: "error", timestamp: true },
     inbounds:[
       {
+        tag: "vless-ws-in",
+        type: "vless",
+        listen: "::",
+        listen_port: ARGO_PORT,
+        users:[{ uuid: UUID, flow: "" }],
+        transport: {
+          type: "ws",
+          path: "/vless-argo",
+          early_data_header_name: "Sec-WebSocket-Protocol"
+        }
+      },
+      {
         tag: "vmess-ws-in",
         type: "vmess",
         listen: "::",
-        listen_port: parseInt(ARGO_PORT, 10),
+        listen_port: parseInt(ARGO_VMESS_PORT, 10),
         users: [{ uuid: UUID }],
         transport: {
           type: "ws",
@@ -642,7 +657,7 @@ async function extractDomains() {
           fs.unlinkSync(bootLogPath);
           try { await execPromise(`pkill -f "${botRandomName}" > /dev/null 2>&1`); } catch (err) {}
           await new Promise(r => setTimeout(r, 1000));
-          const args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_PORT}`;
+          const args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_VMESS_PORT}`;
           exec(`nohup ${botPath} ${args} >/dev/null 2>&1 &`);
           setTimeout(() => extractDomains(), 6000);
         }
@@ -698,12 +713,16 @@ async function generateLinks(argoDomain) {
     let subTxt = '';
 
     if (!DISABLE_ARGO && argoDomain) {
+      const vlessPath = encodeURIComponent('/vless-argo?ed=2560');
+      const vlessLink = `vless://${UUID}@${CFIP}:${CFPORT}?encryption=none&security=tls&sni=${argoDomain}&type=ws&host=${argoDomain}&path=${vlessPath}&fp=firefox#${nodeName}-VLESS`;
+      subTxt = `${vlessLink}`;
+
       const vmessConfig = {
-        v: '2', ps: nodeName, add: CFIP, port: CFPORT, id: UUID, aid: '0',
+        v: '2', ps: `${nodeName}-VMess`, add: CFIP, port: CFPORT, id: UUID, aid: '0',
         scy: 'auto', net: 'ws', type: 'none', host: argoDomain, path: '/vmess-argo?ed=2560',
         tls: 'tls', sni: argoDomain, alpn: '', fp: 'firefox'
       };
-      subTxt = `vmess://${Buffer.from(JSON.stringify(vmessConfig)).toString('base64')}`;
+      subTxt += `\nvmess://${Buffer.from(JSON.stringify(vmessConfig)).toString('base64')}`;
     }
 
     if (isValidPort(TUIC_PORT)) {
