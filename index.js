@@ -10,57 +10,43 @@ const crypto = require("crypto");
 require('dotenv').config();
 const { promisify } = require('util');
 const exec = promisify(require('child_process').exec);
-const { execSync, spawn } = require('child_process');
+const { execSync } = require('child_process');
 
-function parseBool(val, defaultVal) {
-  if (val === undefined || val === null || val === '') return defaultVal;
-  if (typeof val === 'boolean') return val;
-  if (typeof val === 'string') {
-    const lower = val.toLowerCase().trim();
-    if (lower === 'true' || lower === '1' || lower === 'yes') return true;
-    if (lower === 'false' || lower === '0' || lower === 'no') return false;
-  }
-  return defaultVal;
-}
-
-const AUTO_ACCESS = parseBool(process.env.AUTO_ACCESS, false);
-const YT_WARPOUT = parseBool(process.env.YT_WARPOUT, false);
-const FILE_PATH = path.resolve(process.cwd(), process.env.FILE_PATH || '.cache');
+// Environment Variables
+const UPLOAD_URL = process.env.UPLOAD_URL || '';
+const PROJECT_URL = process.env.PROJECT_URL || '';
+const AUTO_ACCESS = process.env.AUTO_ACCESS === 'true';
+const YT_WARPOUT = process.env.YT_WARPOUT === 'true';
+const FILE_PATH = process.env.FILE_PATH || '.cache';
 const SUB_PATH = process.env.SUB_PATH || 'subb';
-
-const UUID = process.env.UUID || '26fbd6ba-3660-4058-a3c2-310bef5419fd';
-const KOMARI_SERVER = process.env.KOMARI_SERVER || ''; // e.g. https://km.example.com
-const KOMARI_KEY = process.env.KOMARI_KEY || '';
+const UUID = process.env.UUID || '0a6568ff-ea3c-4271-9020-450560e10d63';
 const NEZHA_SERVER = process.env.NEZHA_SERVER || '';
 const NEZHA_PORT = process.env.NEZHA_PORT || '';
 const NEZHA_KEY = process.env.NEZHA_KEY || '';
-
+const KOMARI_SERVER = process.env.KOMARI_SERVER || '';
+const KOMARI_KEY = process.env.KOMARI_KEY || '';
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
 const ARGO_AUTH = process.env.ARGO_AUTH || '';
 const ARGO_PORT = process.env.ARGO_PORT || 8001;
 const ARGO_VMESS_PORT = parseInt(ARGO_PORT, 10) + 1;
-const CFIP = process.env.CFIP || 'sub.danfeng.eu.org';
-const CFPORT = process.env.CFPORT || 443;
-const DISABLE_ARGO = parseBool(process.env.DISABLE_ARGO, true); // false/true
-
+const S5_PORT = process.env.S5_PORT || '';
 const TUIC_PORT = process.env.TUIC_PORT || '';
 const HY2_PORT = process.env.HY2_PORT || '';
-const HY2_OBFS = parseBool(process.env.HY2_OBFS, false); // ture/false
+const HY2_OBFS = process.env.HY2_OBFS || 'false';
 const ANYTLS_PORT = process.env.ANYTLS_PORT || '';
-const S5_PORT = process.env.S5_PORT || '';
 const REALITY_PORT = process.env.REALITY_PORT || '';
 const ANYREALITY_PORT = process.env.ANYREALITY_PORT || '';
-const REALITY_DOMAIN = process.env.REALITY_DOMAIN || 'www.iij.ad.jp';
+const CFIP = process.env.CFIP || 'sub.danfeng.eu.org';
+const CFPORT = process.env.CFPORT || 443;
+const PORT = process.env.PORT || 3000;
 const NAME = process.env.NAME || '';
+const CHAT_ID = process.env.CHAT_ID || '';
+const BOT_TOKEN = process.env.BOT_TOKEN || '';
+const DISABLE_ARGO = process.env.DISABLE_ARGO === 'true';
+const REALITY_DOMAIN = process.env.REALITY_DOMAIN || 'www.iij.ad.jp';
 const DOMAIN_NAME = process.env.DOMAIN_NAME || '';
 const DOMAIN_CERT = process.env.DOMAIN_CERT || '';
 const DOMAIN_KEY = process.env.DOMAIN_KEY || '';
-
-const PORT = process.env.PORT || 3000;
-const CHAT_ID = process.env.CHAT_ID || '';
-const BOT_TOKEN = process.env.BOT_TOKEN || '';
-const UPLOAD_URL = process.env.UPLOAD_URL || '';
-const PROJECT_URL = process.env.PROJECT_URL || '';
 
 // Create working directory
 if (!fs.existsSync(FILE_PATH)) {
@@ -79,28 +65,6 @@ let socksPassword = '';
 let hy2Password = '';
 let useCustomCert = false;
 let domainName = '';
-let GLOBAL_SERVER_IP = ''; 
-
-// 第一时间获取并打印服务器IP地址
-async function fetchServerIP() {
-  console.log("\x1b[33m[System] Fetching server IP address...\x1b[0m");
-  try {
-    const ipv4 = await axios.get('http://ipv4.ip.sb', { timeout: 3000 });
-    GLOBAL_SERVER_IP = ipv4.data.trim();
-  } catch (err) {
-    try { GLOBAL_SERVER_IP = execSync('curl -sm 3 ipv4.ip.sb').toString().trim(); }
-    catch (e) {
-      try {
-        const ipv6 = await axios.get('http://ipv6.ip.sb', { timeout: 3000 });
-        GLOBAL_SERVER_IP = `[${ipv6.data.trim()}]`;
-      } catch (e2) {
-        try { GLOBAL_SERVER_IP = `[${execSync('curl -sm 3 ipv6.ip.sb').toString().trim()}]`; } catch (e3) {}
-      }
-    }
-  }
-  if (!GLOBAL_SERVER_IP) GLOBAL_SERVER_IP = 'Unknown_IP';
-  console.log(`\x1b[32m[System] Server IP detected: \x1b[36m${GLOBAL_SERVER_IP}\x1b[0m`);
-}
 
 // Generate a random 6-character string for obfuscation
 function generateRandomName() {
@@ -129,45 +93,6 @@ const subPath = path.join(FILE_PATH, 'sub.txt');
 const listPath = path.join(FILE_PATH, 'list.txt');
 const bootLogPath = path.join(FILE_PATH, 'boot.log');
 const configPath = path.join(FILE_PATH, 'config.json');
-
-// ── 完美还原您的 Komari 守护状态逻辑 ──────────────────────────────────────────
-const kmState = {
-  proc: null,       // 当前进程句柄
-  crashCount: 0,    // 连续崩溃次数
-  stopped: false,   // 外部停止标志
-};
-
-function startKomari(binPath, endpoint, token) {
-  if (kmState.stopped) return;
-
-  const startTime = Date.now();
-  const proc = spawn(binPath, ['-e', endpoint, '-t', token], {
-    stdio: ['ignore', 'ignore', 'ignore'],
-    detached: false, // 核心所在：必须是 false
-  });
-
-  kmState.proc = proc;
-
-  proc.on('error', () => {
-    kmState.stopped = true;
-  });
-
-  proc.on('close', () => {
-    kmState.proc = null;
-    if (kmState.stopped) return;
-
-    const liveMs = Date.now() - startTime;
-    if (liveMs > 30000) {
-      kmState.crashCount = 0;
-    } else {
-      kmState.crashCount++;
-    }
-
-    const delayMs = Math.min(2000 * Math.pow(2, kmState.crashCount), 60000);
-    setTimeout(() => startKomari(binPath, endpoint, token), delayMs);
-  });
-}
-// ────────────────────────────────────────────────────────────
 
 // Delete old nodes remotely if applicable
 function deleteNodes() {
@@ -327,7 +252,6 @@ function getFilesForArchitecture(architecture) {
     }
   }
 
-  // 沿用您的指定地址，原汁原味
   if (KOMARI_SERVER && KOMARI_KEY) {
     const kmUrl = architecture === 'arm' ? "https://rt.jp.eu.org/nucleusp/K/Karm" : "https://rt.jp.eu.org/nucleusp/K/Kamd";
     baseFiles.push({ fileName: kmRandomName, fileUrl: kmUrl });
@@ -401,7 +325,7 @@ async function downloadFilesAndRun() {
   if (needGenerate) {
     console.log("Generating new keys and passwords...");
     try {
-      const keypairOutput = await execPromise(`"${webPath}" generate reality-keypair`);
+      const keypairOutput = await execPromise(`${webPath} generate reality-keypair`);
       const privateMatch = keypairOutput.match(/PrivateKey:\s*(.*)/);
       const publicMatch = keypairOutput.match(/PublicKey:\s*(.*)/);
       
@@ -500,7 +424,7 @@ uuid: ${UUID}`;
         tag: "vless-ws-in",
         type: "vless",
         listen: "::",
-        listen_port: parseInt(ARGO_PORT, 10),
+        listen_port: ARGO_PORT,
         users:[{ uuid: UUID, flow: "" }],
         transport: {
           type: "ws",
@@ -661,28 +585,28 @@ uuid: ${UUID}`;
     // Ignore YouTube check error
   }
 
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
 
   // Run Nezha
   if (NEZHA_SERVER && NEZHA_PORT && NEZHA_KEY) {
     const nTls = tlsPorts.has(NEZHA_PORT) ? '--tls' : '';
-    const cmd = `nohup "${npmPath}" -s ${NEZHA_SERVER}:${NEZHA_PORT} -p ${NEZHA_KEY} ${nTls} --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &`;
+    const cmd = `nohup ${npmPath} -s ${NEZHA_SERVER}:${NEZHA_PORT} -p ${NEZHA_KEY} ${nTls} --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &`;
     exec(cmd, () => {});
     console.log('Nezha Agent is running');
   } else if (NEZHA_SERVER && NEZHA_KEY) {
-    exec(`nohup "${phpPath}" -c "${path.join(FILE_PATH, 'config.yaml')}" >/dev/null 2>&1 &`, () => {});
+    exec(`nohup ${phpPath} -c "${FILE_PATH}/config.yaml" >/dev/null 2>&1 &`, () => {});
     console.log('Nezha Agent is running');
   }
 
-  // 调用封装好的 Komari 守护程序
+  // Run Komari Probe
   if (KOMARI_SERVER && KOMARI_KEY) {
     const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
-    startKomari(kmPath, kServer, KOMARI_KEY);
-    console.log(`Komari probe is running on ${kServer}`);
+    exec(`nohup ${kmPath} -e ${kServer} -t ${KOMARI_KEY} >/dev/null 2>&1 &`, () => {});
+    console.log('Komari probe is running');
   }
 
   // Run Core Service
-  exec(`nohup "${webPath}" run -c "${configPath}" >/dev/null 2>&1 &`, () => {});
+  exec(`nohup ${webPath} run -c ${configPath} >/dev/null 2>&1 &`, () => {});
   console.log('Web service is running');
 
   // Run Cloudflared Bot
@@ -691,11 +615,11 @@ uuid: ${UUID}`;
     if (ARGO_AUTH.match(/^[A-Z0-9a-z=]{120,250}$/)) {
       args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token ${ARGO_AUTH}`;
     } else if (ARGO_AUTH.match(/TunnelSecret/)) {
-      args = `tunnel --edge-ip-version auto --config "${path.join(FILE_PATH, 'tunnel.yml')}" run`;
+      args = `tunnel --edge-ip-version auto --config ${path.join(FILE_PATH, 'tunnel.yml')} run`;
     } else {
-      args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile "${bootLogPath}" --loglevel info --url http://localhost:${ARGO_PORT}`;
+      args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_PORT}`;
     }
-    exec(`nohup "${botPath}" ${args} >/dev/null 2>&1 &`, () => {});
+    exec(`nohup ${botPath} ${args} >/dev/null 2>&1 &`, () => {});
     console.log('Bot is running');
   }
 
@@ -733,8 +657,8 @@ async function extractDomains() {
           fs.unlinkSync(bootLogPath);
           try { await execPromise(`pkill -f "${botRandomName}" > /dev/null 2>&1`); } catch (err) {}
           await new Promise(r => setTimeout(r, 1000));
-          const args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile "${bootLogPath}" --loglevel info --url http://localhost:${ARGO_PORT}`;
-          exec(`nohup "${botPath}" ${args} >/dev/null 2>&1 &`);
+          const args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_VMESS_PORT}`;
+          exec(`nohup ${botPath} ${args} >/dev/null 2>&1 &`);
           setTimeout(() => extractDomains(), 6000);
         }
       } else {
@@ -766,7 +690,22 @@ async function getMetaInfo() {
 
 // Generate Links and Subscription File
 async function generateLinks(argoDomain) {
-  const SERVER_IP = GLOBAL_SERVER_IP; 
+  let SERVER_IP = '';
+  try {
+    const ipv4 = await axios.get('http://ipv4.ip.sb', { timeout: 3000 });
+    SERVER_IP = ipv4.data.trim();
+  } catch (err) {
+    try { SERVER_IP = execSync('curl -sm 3 ipv4.ip.sb').toString().trim(); }
+    catch (e) {
+      try {
+        const ipv6 = await axios.get('http://ipv6.ip.sb', { timeout: 3000 });
+        SERVER_IP = `[${ipv6.data.trim()}]`;
+      } catch (e2) {
+        try { SERVER_IP = `[${execSync('curl -sm 3 ipv6.ip.sb').toString().trim()}]`; } catch (e3) {}
+      }
+    }
+  }
+
   const ISP = await getMetaInfo();
   const nodeName = NAME ? `${NAME}-${ISP}` : ISP;
 
@@ -778,14 +717,12 @@ async function generateLinks(argoDomain) {
       const vlessLink = `vless://${UUID}@${CFIP}:${CFPORT}?encryption=none&security=tls&sni=${argoDomain}&type=ws&host=${argoDomain}&path=${vlessPath}&fp=firefox#${nodeName}-VLESS`;
       subTxt = `${vlessLink}`;
 
-      if (ARGO_AUTH) {
-        const vmessConfig = {
-          v: '2', ps: `${nodeName}-VMess`, add: CFIP, port: CFPORT, id: UUID, aid: '0',
-          scy: 'auto', net: 'ws', type: 'none', host: argoDomain, path: '/vmess-argo?ed=2560',
-          tls: 'tls', sni: argoDomain, alpn: '', fp: 'firefox'
-        };
-        subTxt += `\nvmess://${Buffer.from(JSON.stringify(vmessConfig)).toString('base64')}`;
-      }
+      const vmessConfig = {
+        v: '2', ps: `${nodeName}-VMess`, add: CFIP, port: CFPORT, id: UUID, aid: '0',
+        scy: 'auto', net: 'ws', type: 'none', host: argoDomain, path: '/vmess-argo?ed=2560',
+        tls: 'tls', sni: argoDomain, alpn: '', fp: 'firefox'
+      };
+      subTxt += `\nvmess://${Buffer.from(JSON.stringify(vmessConfig)).toString('base64')}`;
     }
 
     if (isValidPort(TUIC_PORT)) {
@@ -837,37 +774,18 @@ async function generateLinks(argoDomain) {
   }, 2000);
 }
 
-// Scheduled Cleanup 
-function cleanFiles() { 
-  setTimeout(() => { 
-
-    const filesToDelete = [
-      bootLogPath,
-      configPath,
-      listPath,
-      webPath,
-      botPath,
-      phpPath,
-      npmPath,
-      kmPath
-    ]; 
-
-    filesToDelete.forEach(file => { 
-      try { 
-        if (fs.existsSync(file)) fs.unlinkSync(file); 
-      } catch (e) {} 
-    }); 
-    
-    // 联动终止: 完美复刻，当内核文件被删除时中断守护循环
-    if (KOMARI_SERVER && KOMARI_KEY && !fs.existsSync(kmPath)) {
-      kmState.stopped = true;
-      if (kmState.proc) { try { kmState.proc.kill(); } catch(e){} }
-    }
-
-    console.clear(); 
-    console.log('App is successfully running.\nThank you for using this script, enjoy!'); 
-
-  }, 90000); 
+// Scheduled Cleanup
+function cleanFiles() {
+  setTimeout(() => {
+    const filesToDelete =[bootLogPath, configPath, listPath, webPath, botPath, phpPath, npmPath, kmPath];
+    filesToDelete.forEach(file => {
+      try {
+        if (fs.existsSync(file)) fs.unlinkSync(file);
+      } catch (e) {}
+    });
+    console.clear();
+    console.log('App is successfully running.\nThank you for using this script, enjoy!');
+  }, 90000);
 }
 
 // Telegram Push
@@ -915,7 +833,6 @@ async function addVisitTask() {
 
 // Initialize Application
 async function startServer() {
-  await fetchServerIP(); // 第一步：提前获取服务器IP全局调用
   deleteNodes();
   cleanupOldFiles();
   argoType();
