@@ -1,50 +1,79 @@
-name: Docker Build
+name: Build and Push Docker Image
 
 on:
   push:
-    branches: ["main"]
-
+    branches: [ main ]
+    paths:
+      - 'Dockerfile'
+      - 'index.js'
+      - 'package.json'
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag (optional)"
-        required: false
-
-permissions:
-  contents: read
-  packages: write   # 👈 关键
+        description: 'Docker image version tag (e.g., v1.0.0, latest)'
+        required: true
+        default: 'latest' # 默认版本号为 latest
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set tag
-        id: tag
-        run: |
-          IMAGE=ghcr.io/andeasw/sbkojs
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            TAG=${{ github.event.inputs.version }}
+      - name: Set lower case variables and image tags
+        id: set_vars
+        run: |
+          # 将 repository owner 转换为小写
+          REPO_OWNER_LOWER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          # 将 repository name 转换为小写，这将作为镜像名称
+          REPO_NAME_LOWER=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
+
+          # 根据触发方式确定版本号
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # 如果是手动触发，使用输入的版本号
+            VERSION_TAG="${{ github.event.inputs.version }}"
           else
-            TAG=latest
+            # 如果是 push 或 pull_request 触发，使用 commit SHA 的前7位作为版本号
+            VERSION_TAG=$(echo ${{ github.sha }} | cut -c1-7)
           fi
 
-          echo "tag=$IMAGE:$TAG" >> $GITHUB_OUTPUT
+          # 确保 latest 标签也总是被推送到
+          IMAGE_TAGS="ghcr.io/${REPO_OWNER_LOWER}/${REPO_NAME_LOWER}:${VERSION_TAG}"
+          if [[ "${VERSION_TAG}" != "latest" ]]; then
+            IMAGE_TAGS="${IMAGE_TAGS}\nghcr.io/${REPO_OWNER_LOWER}/${REPO_NAME_LOWER}:latest"
+          fi
 
-      - name: Build & Push
+          echo "IMAGE_TAGS=${IMAGE_TAGS}" >> "$GITHUB_OUTPUT"
+          echo "VERSION_TAG=${VERSION_TAG}" >> "$GITHUB_OUTPUT" # 方便后续步骤使用
+          echo "REPO_NAME_LOWER=${REPO_NAME_LOWER}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ steps.tag.outputs.tag }}
+          platforms: linux/amd64,linux/arm64 # 保留多平台构建
+          tags: ${{ steps.set_vars.outputs.IMAGE_TAGS }} # 使用前面步骤生成的标签列表
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=${{ steps.set_vars.outputs.REPO_NAME_LOWER }} Server
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.version=${{ steps.set_vars.outputs.VERSION_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
