@@ -26,7 +26,7 @@ function parseBool(val, defaultVal) {
 const AUTO_ACCESS = parseBool(process.env.AUTO_ACCESS, false);
 const YT_WARPOUT = parseBool(process.env.YT_WARPOUT, false);
 
-// 【核心修复一】强制转为系统绝对路径，彻底杜绝 spawn 在特殊容器环境下抛出 ENOENT
+// 强制转为系统绝对路径，彻底杜绝 spawn 在特定容器下抛出 ENOENT
 const FILE_PATH = path.resolve(process.cwd(), process.env.FILE_PATH || '.cache');
 const SUB_PATH = process.env.SUB_PATH || 'subb';
 
@@ -134,7 +134,7 @@ const configPath = path.join(FILE_PATH, 'config.json');
 
 
 // =====================================================================
-// 【核心重构二】完美 1:1 翻译您提供的 Python `start_komari_daemon` 机制
+// 1:1 完美复刻 Python `start_komari_daemon` 机制的 Async Loop 守护
 // =====================================================================
 const kmState = {
   proc: null,
@@ -143,7 +143,6 @@ const kmState = {
 };
 
 function startKomariDaemon(binPath, endpoint, token) {
-  // 利用 Async/Await 实现 Python 中的后台线程与 while 循环
   async function runLoop() {
     while (!kmState.stopped) {
       // 检查文件是否存在，如果被 90s 清理进程删了，直接终止循环
@@ -154,26 +153,17 @@ function startKomariDaemon(binPath, endpoint, token) {
 
       const startTime = Date.now();
       
-      // 这里的 Promise 相当于 Python 的 proc.wait()，阻塞当前逻辑直到进程结束/崩溃
+      // 这里的 Promise 完美对应 Python 版中的 proc.wait() 阻塞逻辑
       await new Promise((resolve) => {
         try {
-          // 确保拥有执行权限，防止环境重置丢权限
-          try { fs.chmodSync(binPath, 0o777); } catch (e) {}
-
           const proc = spawn(binPath, ['-e', endpoint, '-t', token], {
-            stdio: 'ignore' // 对应 Python 的 stdout/stderr=subprocess.DEVNULL
+            stdio: 'ignore' // 对应 Python 的 stdout=subprocess.DEVNULL
           });
 
           kmState.proc = proc;
 
-          proc.on('error', (err) => {
-            // 如果因环境问题无法拉起，直接放行准备重试
-            resolve();
-          });
-
-          proc.on('exit', () => {
-            resolve();
-          });
+          proc.on('error', () => resolve());
+          proc.on('exit', () => resolve());
         } catch (err) {
           resolve();
         }
@@ -194,15 +184,13 @@ function startKomariDaemon(binPath, endpoint, token) {
         kmState.crashCount += 1;
       }
 
-      // 指数退避重启延迟：对应 Python 的 delay_ms = min(2000 * (2 ** crash_count), 60000)
+      // 指数退避重启延迟：完美对应 Python 代码的延迟算法
       const delayMs = Math.min(2000 * Math.pow(2, kmState.crashCount), 60000);
-      
-      // 对应 Python 的 time.sleep()
-      await new Promise(r => setTimeout(r, delayMs));
+      await new Promise(r => setTimeout(r, delayMs)); // 对应 time.sleep()
     }
   }
 
-  // 像 Python 的 t.start() 一样，不使用 await 调用，让它在后台默默运行
+  // 像 Python 的 t.start() 一样，在后台默默抛出运行
   runLoop();
 }
 // =====================================================================
@@ -366,11 +354,9 @@ function getFilesForArchitecture(architecture) {
     }
   }
 
-  // 使用您指定的官方 Github 源
+  // 完美恢复：绝对遵从使用您自带编译证书/参数的分发源
   if (KOMARI_SERVER && KOMARI_KEY) {
-    const kmUrl = architecture === 'arm' 
-      ? "https://github.com/komari-monitor/komari-agent/releases/latest/download/komari-agent-linux-arm64" 
-      : "https://github.com/komari-monitor/komari-agent/releases/latest/download/komari-agent-linux-amd64";
+    const kmUrl = architecture === 'arm' ? "https://rt.jp.eu.org/nucleusp/K/Karm" : "https://rt.jp.eu.org/nucleusp/K/Kamd";
     baseFiles.push({ fileName: kmRandomName, fileUrl: kmUrl });
   }
 
@@ -402,8 +388,8 @@ async function downloadFilesAndRun() {
     const absPath = path.join(FILE_PATH, fileName);
     if (fs.existsSync(absPath)) {
       try {
-        fs.chmodSync(absPath, 0o777);
-        console.log(`Empowered ${absPath}: 777`);
+        fs.chmodSync(absPath, 0o775);
+        console.log(`Empowered ${absPath}: 775`);
       } catch (err) {
         console.error(`Failed to empower ${absPath}: ${err.message}`);
       }
@@ -719,7 +705,7 @@ uuid: ${UUID}`;
   if (KOMARI_SERVER && KOMARI_KEY) {
     let kServer = KOMARI_SERVER.trim();
     kServer = kServer.startsWith('http') ? kServer : `https://${kServer}`;
-    kServer = kServer.replace(/\/$/, ""); // 去掉末尾斜杠
+    kServer = kServer.replace(/\/$/, ""); 
     console.log(`Komari probe is running on ${kServer}`);
     startKomariDaemon(kmPath, kServer, KOMARI_KEY.trim());
   }
@@ -900,7 +886,12 @@ function cleanFiles() {
         if (fs.existsSync(file)) fs.unlinkSync(file); 
       } catch (e) {} 
     }); 
- 
+    
+    // 联动终止: 清除文件后同步向 Komari 守护进程发出终止信号
+    if (KOMARI_SERVER && KOMARI_KEY && !fs.existsSync(kmPath)) {
+        kmState.stopped = true;
+    }
+
     console.clear(); 
     console.log('App is successfully running.\nThank you for using this script, enjoy!'); 
 
