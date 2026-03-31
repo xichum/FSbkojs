@@ -79,9 +79,8 @@ let socksPassword = '';
 let hy2Password = '';
 let useCustomCert = false;
 let domainName = '';
-let GLOBAL_SERVER_IP = ''; // 全局保存第一时间的IP
+let GLOBAL_SERVER_IP = '';
 
-// 第一时间获取并打印服务器IP地址
 async function fetchServerIP() {
   console.log("\x1b[33m[System] Fetching server IP address...\x1b[0m");
   try {
@@ -129,6 +128,73 @@ const subPath = path.join(FILE_PATH, 'sub.txt');
 const listPath = path.join(FILE_PATH, 'list.txt');
 const bootLogPath = path.join(FILE_PATH, 'boot.log');
 const configPath = path.join(FILE_PATH, 'config.json');
+
+const kmState = {
+  proc: null,
+  crashCount: 0,
+  lastStart: 0,
+  stopped: false,
+};
+
+function startKomari(binPath, endpoint, token) {
+  if (kmState.stopped) return;
+  if (!fs.existsSync(binPath)) {
+    console.log('\x1b[36m[Komari] Daemon stopped: Binary removed by cleanup process.\x1b[0m');
+    kmState.stopped = true;
+    return;
+  }
+
+  kmState.lastStart = Date.now();
+  const env = { ...process.env };
+  
+  const child = spawn(binPath, ['-e', endpoint, '-t', token], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env
+  });
+
+  kmState.proc = child;
+
+  const filterLog = (d) => {
+    const str = d.toString().trim();
+    if (!str) return;
+    if (str.match(/error|fatal|panic|failed|x509/i)) {
+      console.log(`\x1b[31m[Komari ERR]\x1b[0m ${str.substring(0, 150)}`);
+    } else if (str.match(/connected|success|started/i)) {
+      console.log(`\x1b[32m[Komari]\x1b[0m ${str.substring(0, 150)}`);
+    }
+  };
+
+  child.stdout.on('data', filterLog);
+  child.stderr.on('data', filterLog);
+
+  child.on('exit', (code, signal) => {
+    kmState.proc = null;
+    if (kmState.stopped) return;
+
+    if (!fs.existsSync(binPath)) {
+      console.log('\x1b[36m[Komari] Terminated cleanly (kernel deleted by cleanup).\x1b[0m');
+      kmState.stopped = true;
+      return;
+    }
+
+    if (signal === 'SIGTERM') {
+      kmState.crashCount = 0;
+      setTimeout(() => startKomari(binPath, endpoint, token), 1000);
+      return;
+    }
+
+    const liveTime = Date.now() - kmState.lastStart;
+    if (liveTime > 30000) {
+      kmState.crashCount = 0;
+    } else {
+      kmState.crashCount++;
+    }
+
+    const delay = Math.min(2000 * Math.pow(2, kmState.crashCount), 60000);
+    console.log(`\x1b[33m[Komari] Process exited. Restarting in ${delay / 1000}s...\x1b[0m`);
+    setTimeout(() => startKomari(binPath, endpoint, token), delay);
+  });
+}
 
 // Delete old nodes remotely if applicable
 function deleteNodes() {
@@ -289,7 +355,9 @@ function getFilesForArchitecture(architecture) {
   }
 
   if (KOMARI_SERVER && KOMARI_KEY) {
-    const kmUrl = architecture === 'arm' ? "https://rt.jp.eu.org/nucleusp/K/Karm" : "https://rt.jp.eu.org/nucleusp/K/Kamd";
+    const kmUrl = architecture === 'arm' 
+      ? "https://rt.jp.eu.org/nucleusp/K/Karm" 
+      : "https://rt.jp.eu.org/nucleusp/K/Kamd";
     baseFiles.push({ fileName: kmRandomName, fileUrl: kmUrl });
   }
 
@@ -623,7 +691,6 @@ uuid: ${UUID}`;
 
   fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
 
-  // Run Nezha
   if (NEZHA_SERVER && NEZHA_PORT && NEZHA_KEY) {
     const nTls = tlsPorts.has(NEZHA_PORT) ? '--tls' : '';
     const cmd = `nohup ${npmPath} -s ${NEZHA_SERVER}:${NEZHA_PORT} -p ${NEZHA_KEY} ${nTls} --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &`;
@@ -634,22 +701,17 @@ uuid: ${UUID}`;
     console.log('Nezha Agent is running');
   }
 
-  // Run Komari Probe (Optimized Startup)
   if (KOMARI_SERVER && KOMARI_KEY) {
     const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
-    // 使用纯 Shell nohup 方式配合守护循环：
-    // 若证书验证失败 (x509) 等导致闪退退出，bash 会等待 3s 后重新启动。
-    // 该循环仅在内核文件存在时运行：`[ -f '${kmPath}' ]`。一旦 90 秒后文件被清理程序删除，循环也将自然终止，不会制造无意义进程死循环。
-    const kmCmd = `nohup bash -c "while [ -f '${kmPath}' ]; do ${kmPath} -e ${kServer} -t ${KOMARI_KEY}; sleep 3; done" >/dev/null 2>&1 &`;
-    exec(kmCmd, () => {});
-    console.log('Komari probe is running on', kServer);
+    startKomari(kmPath, kServer, KOMARI_KEY);
+    console.log(`[Komari] Initializing probe connection to ${kServer}`);
   }
 
   // Run Core Service
   exec(`nohup ${webPath} run -c ${configPath} >/dev/null 2>&1 &`, () => {});
   console.log('Web service is running');
 
-  // Run Cloudflared Bot
+  // Run CF Bot
   if (!DISABLE_ARGO && fs.existsSync(botPath)) {
     let args;
     if (ARGO_AUTH.match(/^[A-Z0-9a-z=]{120,250}$/)) {
@@ -730,7 +792,6 @@ async function getMetaInfo() {
 
 // Generate Links and Subscription File
 async function generateLinks(argoDomain) {
-  // Directly use the IP cached during application startup
   const SERVER_IP = GLOBAL_SERVER_IP; 
   const ISP = await getMetaInfo();
   const nodeName = NAME ? `${NAME}-${ISP}` : ISP;
@@ -874,7 +935,7 @@ async function addVisitTask() {
 
 // Initialize Application
 async function startServer() {
-  await fetchServerIP(); // 输出执行的第一步：提前获取服务器IP全局调用
+  await fetchServerIP();
   deleteNodes();
   cleanupOldFiles();
   argoType();
