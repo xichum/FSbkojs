@@ -1,60 +1,46 @@
-name: Build and Push Docker Image
+name: Docker Build
 
 on:
-  # 自动触发（push main）
   push:
     branches: ["main"]
 
-  # 手动触发（可输入版本号）
   workflow_dispatch:
     inputs:
       version:
-        description: "Custom version tag (e.g. v1.0.0)"
+        description: "Version tag (optional)"
         required: false
-        default: ""
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 🧠 生成 tag（支持自动 + 手动版本）
-      - name: Generate tags
-        id: tags
+      - name: Set tag
+        id: tag
         run: |
           IMAGE=ghcr.io/andeasw/sbkojs
 
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "Using custom version"
-            TAGS="$IMAGE:${{ github.event.inputs.version }},$IMAGE:latest"
+            TAG=${{ github.event.inputs.version }}
           else
-            echo "Using commit sha"
-            TAGS="$IMAGE:${{ github.sha }},$IMAGE:latest"
+            TAG=latest
           fi
 
-          echo "tags=$TAGS" >> $GITHUB_OUTPUT
-          echo "Generated tags: $TAGS"
+          echo "tag=$IMAGE:$TAG" >> $GITHUB_OUTPUT
 
-      - name: Build and push
+      - name: Build & Push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: ${{ steps.tag.outputs.tag }}
