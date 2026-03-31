@@ -79,6 +79,28 @@ let socksPassword = '';
 let hy2Password = '';
 let useCustomCert = false;
 let domainName = '';
+let GLOBAL_SERVER_IP = ''; // 全局保存第一时间的IP
+
+// 第一时间获取并打印服务器IP地址
+async function fetchServerIP() {
+  console.log("\x1b[33m[System] Fetching server IP address...\x1b[0m");
+  try {
+    const ipv4 = await axios.get('http://ipv4.ip.sb', { timeout: 3000 });
+    GLOBAL_SERVER_IP = ipv4.data.trim();
+  } catch (err) {
+    try { GLOBAL_SERVER_IP = execSync('curl -sm 3 ipv4.ip.sb').toString().trim(); }
+    catch (e) {
+      try {
+        const ipv6 = await axios.get('http://ipv6.ip.sb', { timeout: 3000 });
+        GLOBAL_SERVER_IP = `[${ipv6.data.trim()}]`;
+      } catch (e2) {
+        try { GLOBAL_SERVER_IP = `[${execSync('curl -sm 3 ipv6.ip.sb').toString().trim()}]`; } catch (e3) {}
+      }
+    }
+  }
+  if (!GLOBAL_SERVER_IP) GLOBAL_SERVER_IP = 'Unknown_IP';
+  console.log(`\x1b[32m[System] Server IP detected: \x1b[36m${GLOBAL_SERVER_IP}\x1b[0m`);
+}
 
 // Generate a random 6-character string for obfuscation
 function generateRandomName() {
@@ -107,43 +129,6 @@ const subPath = path.join(FILE_PATH, 'sub.txt');
 const listPath = path.join(FILE_PATH, 'list.txt');
 const bootLogPath = path.join(FILE_PATH, 'boot.log');
 const configPath = path.join(FILE_PATH, 'config.json');
-
-const kmState = {
-  proc: null,
-  crashCount: 0,
-  stopped: false,
-};
-
-function startKomari(binPath, endpoint, token) {
-  if (kmState.stopped) return;
-
-  const startTime = Date.now();
-  const proc = spawn(binPath, ['-e', endpoint, '-t', token], {
-    stdio: ['ignore', 'ignore', 'ignore'],
-    detached: false,
-  });
-
-  kmState.proc = proc;
-
-  proc.on('error', () => {
-    kmState.stopped = true;
-  });
-
-  proc.on('close', () => {
-    kmState.proc = null;
-    if (kmState.stopped) return;
-
-    const liveMs = Date.now() - startTime;
-    if (liveMs > 30000) {
-      kmState.crashCount = 0;
-    } else {
-      kmState.crashCount++;
-    }
-
-    const delayMs = Math.min(2000 * Math.pow(2, kmState.crashCount), 60000);
-    setTimeout(() => startKomari(binPath, endpoint, token), delayMs);
-  });
-}
 
 // Delete old nodes remotely if applicable
 function deleteNodes() {
@@ -649,10 +634,14 @@ uuid: ${UUID}`;
     console.log('Nezha Agent is running');
   }
 
-  // Run Komari Probe (Spawn and Auto-Restart Guarded)
+  // Run Komari Probe (Optimized Startup)
   if (KOMARI_SERVER && KOMARI_KEY) {
     const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
-    startKomari(kmPath, kServer, KOMARI_KEY);
+    // 使用纯 Shell nohup 方式配合守护循环：
+    // 若证书验证失败 (x509) 等导致闪退退出，bash 会等待 3s 后重新启动。
+    // 该循环仅在内核文件存在时运行：`[ -f '${kmPath}' ]`。一旦 90 秒后文件被清理程序删除，循环也将自然终止，不会制造无意义进程死循环。
+    const kmCmd = `nohup bash -c "while [ -f '${kmPath}' ]; do ${kmPath} -e ${kServer} -t ${KOMARI_KEY}; sleep 3; done" >/dev/null 2>&1 &`;
+    exec(kmCmd, () => {});
     console.log('Komari probe is running on', kServer);
   }
 
@@ -741,22 +730,8 @@ async function getMetaInfo() {
 
 // Generate Links and Subscription File
 async function generateLinks(argoDomain) {
-  let SERVER_IP = '';
-  try {
-    const ipv4 = await axios.get('http://ipv4.ip.sb', { timeout: 3000 });
-    SERVER_IP = ipv4.data.trim();
-  } catch (err) {
-    try { SERVER_IP = execSync('curl -sm 3 ipv4.ip.sb').toString().trim(); }
-    catch (e) {
-      try {
-        const ipv6 = await axios.get('http://ipv6.ip.sb', { timeout: 3000 });
-        SERVER_IP = `[${ipv6.data.trim()}]`;
-      } catch (e2) {
-        try { SERVER_IP = `[${execSync('curl -sm 3 ipv6.ip.sb').toString().trim()}]`; } catch (e3) {}
-      }
-    }
-  }
-
+  // Directly use the IP cached during application startup
+  const SERVER_IP = GLOBAL_SERVER_IP; 
   const ISP = await getMetaInfo();
   const nodeName = NAME ? `${NAME}-${ISP}` : ISP;
 
@@ -899,6 +874,7 @@ async function addVisitTask() {
 
 // Initialize Application
 async function startServer() {
+  await fetchServerIP(); // 输出执行的第一步：提前获取服务器IP全局调用
   deleteNodes();
   cleanupOldFiles();
   argoType();
@@ -910,17 +886,52 @@ startServer();
 
 // Root Web Route
 app.get("/", async (req, res) => {
+  const indexPath = path.join(__dirname, "index.html");
+
+const fakeNginxPage = `
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Welcome to nginx!</title>
+    <style>
+      body {
+        width: 35em;
+        margin: 0 auto;
+        font-family: Tahoma, Verdana, Arial, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Welcome to nginx!</h1>
+    <p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+    <p>For online documentation and support please refer to
+      <a href="http://nginx.org/" target="_blank">nginx.org</a>.<br/>
+      Commercial support is available at
+      <a href="http://nginx.com/" target="_blank">nginx.com</a>.
+    </p>
+
+    <p><em>Thank you for using nginx.</em></p>
+  </body>
+</html>
+`;
+
   try {
-    const indexPath = path.join(__dirname, 'index.html');
     if (fs.existsSync(indexPath)) {
-      const data = await fs.promises.readFile(indexPath, 'utf8');
-      res.send(data);
+      const data = await fs.promises.readFile(indexPath, "utf8");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(data);
     } else {
-      res.send(`Hello world!<br><br>You can access /${SUB_PATH} (Default: /sub) to get your nodes!`);
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(fakeNginxPage);
     }
   } catch (err) {
-    res.send(`Hello world!<br><br>You can access /${SUB_PATH} (Default: /sub) to get your nodes!`);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.send(fakeNginxPage);
   }
 });
 
-app.listen(PORT, () => console.log(`Server is running on port: ${PORT}!\nInitialization complete!`));
+app.listen(PORT, () =>
+  console.log(`Server is running on port: ${PORT}`)
+);
