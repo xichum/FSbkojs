@@ -3,7 +3,6 @@ name: Docker Build
 on:
   push:
     branches: ["main"]
-
   workflow_dispatch:
     inputs:
       version:
@@ -17,7 +16,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -29,22 +27,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set tag
+      - name: Set Docker image tag
         id: tag
         run: |
-          IMAGE=ghcr.io/andeasw/sbkojs
-
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            TAG=${{ github.event.inputs.version }}
+          IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/sbkojs"
+          if [[ -n "${{ github.event.inputs.version }}" ]]; then
+            TAG="${{ github.event.inputs.version }}"
           else
-            TAG=latest
+            TAG="latest"
           fi
+          FULL_TAG="$IMAGE_NAME:$TAG"
+          echo "tag=$FULL_TAG" >> "$GITHUB_OUTPUT"
 
-          echo "tag=$IMAGE:$TAG" >> $GITHUB_OUTPUT
-
-      - name: Build & Push
-        uses: docker/build-push-action@v5
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.repository_owner == 'andeasw' }}
+          push: true
           tags: ${{ steps.tag.outputs.tag }}
