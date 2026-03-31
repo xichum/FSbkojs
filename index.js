@@ -28,7 +28,7 @@ const YT_WARPOUT = parseBool(process.env.YT_WARPOUT, false);
 const FILE_PATH = process.env.FILE_PATH || '.cache';
 const SUB_PATH = process.env.SUB_PATH || 'subb';
 
-const UUID = process.env.UUID || '26fbd6ba-3560-4058-a3c2-310bef5419fd';
+const UUID = process.env.UUID || '26fbd6ba-3660-4058-a3c2-310bef5419fd';
 const KOMARI_SERVER = process.env.KOMARI_SERVER || ''; // e.g. https://km.example.com
 const KOMARI_KEY = process.env.KOMARI_KEY || '';
 const NEZHA_SERVER = process.env.NEZHA_SERVER || '';
@@ -79,6 +79,7 @@ let socksPassword = '';
 let hy2Password = '';
 let useCustomCert = false;
 let domainName = '';
+let globalEncodedSub = ''; // Safe global scope for Express
 
 // Generate a random 6-character string for obfuscation
 function generateRandomName() {
@@ -108,6 +109,7 @@ const listPath = path.join(FILE_PATH, 'list.txt');
 const bootLogPath = path.join(FILE_PATH, 'boot.log');
 const configPath = path.join(FILE_PATH, 'config.json');
 
+// ── Komari Daemon State ───────────────────────────────────────
 const kmState = {
   proc: null,
   crashCount: 0,
@@ -116,34 +118,49 @@ const kmState = {
 
 function startKomari(binPath, endpoint, token) {
   if (kmState.stopped) return;
-
-  const startTime = Date.now();
-  const proc = spawn(binPath, ['-e', endpoint, '-t', token], {
-    stdio: ['ignore', 'ignore', 'ignore'],
-    detached: false,
-  });
-
-  kmState.proc = proc;
-
-  proc.on('error', () => {
+  if (!fs.existsSync(binPath)) {
     kmState.stopped = true;
-  });
+    return;
+  }
 
-  proc.on('close', () => {
-    kmState.proc = null;
-    if (kmState.stopped) return;
+  const absBinPath = path.resolve(binPath);
+  const startTime = Date.now();
+  
+  try {
+    const proc = spawn(absBinPath, ['-e', endpoint.trim(), '-t', token.trim()], {
+      stdio: 'ignore',
+      detached: true,
+    });
 
-    const liveMs = Date.now() - startTime;
-    if (liveMs > 30000) {
-      kmState.crashCount = 0;
-    } else {
-      kmState.crashCount++;
-    }
+    proc.unref(); // Ensure parent detaches properly
+    kmState.proc = proc;
 
-    const delayMs = Math.min(2000 * Math.pow(2, kmState.crashCount), 60000);
-    setTimeout(() => startKomari(binPath, endpoint, token), delayMs);
-  });
+    proc.on('error', (err) => {
+      // If file was deleted or lacks permissions, permanently stop restarting
+      if (err.code === 'ENOENT' || err.code === 'EACCES') {
+        kmState.stopped = true;
+      }
+    });
+
+    proc.on('close', () => {
+      kmState.proc = null;
+      if (kmState.stopped) return;
+
+      const liveMs = Date.now() - startTime;
+      if (liveMs > 30000) {
+        kmState.crashCount = 0;
+      } else {
+        kmState.crashCount++;
+      }
+
+      const delayMs = Math.min(2000 * Math.pow(2, kmState.crashCount), 60000);
+      setTimeout(() => startKomari(binPath, endpoint, token), delayMs);
+    });
+  } catch (err) {
+    kmState.stopped = true;
+  }
 }
+// ────────────────────────────────────────────────────────────
 
 // Delete old nodes remotely if applicable
 function deleteNodes() {
@@ -651,8 +668,9 @@ uuid: ${UUID}`;
 
   // Run Komari Probe (Spawn and Auto-Restart Guarded)
   if (KOMARI_SERVER && KOMARI_KEY) {
-    const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
-    startKomari(kmPath, kServer, KOMARI_KEY);
+    const srv = KOMARI_SERVER.trim();
+    const kServer = srv.startsWith('http') ? srv : `https://${srv}`;
+    startKomari(kmPath, kServer, KOMARI_KEY.trim());
     console.log('Komari probe is running on', kServer);
   }
 
@@ -668,6 +686,7 @@ uuid: ${UUID}`;
     } else if (ARGO_AUTH.match(/TunnelSecret/)) {
       args = `tunnel --edge-ip-version auto --config ${path.join(FILE_PATH, 'tunnel.yml')} run`;
     } else {
+      // 临时隧道强制映射至 ARGO_PORT (主VLESS端口)
       args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_PORT}`;
     }
     exec(`nohup ${botPath} ${args} >/dev/null 2>&1 &`, () => {});
@@ -761,12 +780,11 @@ async function generateLinks(argoDomain) {
   const nodeName = NAME ? `${NAME}-${ISP}` : ISP;
 
   setTimeout(() => {
-    let subTxt = '';
+    let nodes = [];
 
     if (!DISABLE_ARGO && argoDomain) {
       const vlessPath = encodeURIComponent('/vless-argo?ed=2560');
-      const vlessLink = `vless://${UUID}@${CFIP}:${CFPORT}?encryption=none&security=tls&sni=${argoDomain}&type=ws&host=${argoDomain}&path=${vlessPath}&fp=firefox#${nodeName}-VLESS`;
-      subTxt = `${vlessLink}`;
+      nodes.push(`vless://${UUID}@${CFIP}:${CFPORT}?encryption=none&security=tls&sni=${argoDomain}&type=ws&host=${argoDomain}&path=${vlessPath}&fp=firefox#${nodeName}-VLESS`);
 
       if (ARGO_AUTH) {
         const vmessConfig = {
@@ -774,63 +792,59 @@ async function generateLinks(argoDomain) {
           scy: 'auto', net: 'ws', type: 'none', host: argoDomain, path: '/vmess-argo?ed=2560',
           tls: 'tls', sni: argoDomain, alpn: '', fp: 'firefox'
         };
-        subTxt += `\nvmess://${Buffer.from(JSON.stringify(vmessConfig)).toString('base64')}`;
+        nodes.push(`vmess://${Buffer.from(JSON.stringify(vmessConfig)).toString('base64')}`);
       }
     }
 
     if (isValidPort(TUIC_PORT)) {
       const insecureFlag = useCustomCert ? "" : "&allow_insecure=1";
-      subTxt += `\ntuic://${UUID}:${tuicPassword}@${SERVER_IP}:${TUIC_PORT}?sni=${domainName}&congestion_control=bbr&udp_relay_mode=native&alpn=h3${insecureFlag}#${nodeName}`;
+      nodes.push(`tuic://${UUID}:${tuicPassword}@${SERVER_IP}:${TUIC_PORT}?sni=${domainName}&congestion_control=bbr&udp_relay_mode=native&alpn=h3${insecureFlag}#${nodeName}`);
     }
 
     if (isValidPort(HY2_PORT)) {
       const insecureFlag = useCustomCert ? "" : "&insecure=1";
       if (HY2_OBFS) {
-        subTxt += `\nhysteria2://${UUID}@${SERVER_IP}:${HY2_PORT}/?sni=${domainName}&obfs=salamander&obfs-password=${hy2Password}${insecureFlag}#${nodeName}`;
+        nodes.push(`hysteria2://${UUID}@${SERVER_IP}:${HY2_PORT}/?sni=${domainName}&obfs=salamander&obfs-password=${hy2Password}${insecureFlag}#${nodeName}`);
       } else {
-        subTxt += `\nhysteria2://${UUID}@${SERVER_IP}:${HY2_PORT}/?sni=${domainName}&obfs=none${insecureFlag}#${nodeName}`;
+        nodes.push(`hysteria2://${UUID}@${SERVER_IP}:${HY2_PORT}/?sni=${domainName}&obfs=none${insecureFlag}#${nodeName}`);
       }
     }
 
     if (isValidPort(REALITY_PORT)) {
-      subTxt += `\nvless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_DOMAIN}&fp=firefox&pbk=${publicKey}&sid=${shortId}&type=tcp&headerType=none#${nodeName}`;
+      nodes.push(`vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_DOMAIN}&fp=firefox&pbk=${publicKey}&sid=${shortId}&type=tcp&headerType=none#${nodeName}-Reality`);
     }
 
     if (isValidPort(ANYTLS_PORT)) {
       const insecureFlag = useCustomCert ? "" : "&insecure=1&allowInsecure=1";
-      subTxt += `\nanytls://${UUID}@${SERVER_IP}:${ANYTLS_PORT}?security=tls&sni=${domainName}${insecureFlag}#${nodeName}`;
+      nodes.push(`anytls://${UUID}@${SERVER_IP}:${ANYTLS_PORT}?security=tls&sni=${domainName}${insecureFlag}#${nodeName}`);
     }
 
     if (isValidPort(ANYREALITY_PORT)) {
-      subTxt += `\nanytls://${UUID}@${SERVER_IP}:${ANYREALITY_PORT}?security=reality&sni=${REALITY_DOMAIN}&fp=firefox&pbk=${publicKey}&sid=${shortId}&type=tcp&headerType=none#${nodeName}`;
+      nodes.push(`anytls://${UUID}@${SERVER_IP}:${ANYREALITY_PORT}?security=reality&sni=${REALITY_DOMAIN}&fp=firefox&pbk=${publicKey}&sid=${shortId}&type=tcp&headerType=none#${nodeName}`);
     }
 
     if (isValidPort(S5_PORT)) {
       const S5_AUTH = Buffer.from(`${UUID.substring(0, 8)}:${socksPassword}`).toString('base64');
-      subTxt += `\nsocks://${S5_AUTH}@${SERVER_IP}:${S5_PORT}#${nodeName}`;
+      nodes.push(`socks://${S5_AUTH}@${SERVER_IP}:${S5_PORT}#${nodeName}`);
     }
 
-    const encodedSub = Buffer.from(subTxt).toString('base64');
-    console.log('\x1b[32m' + encodedSub + '\x1b[0m');
+    const subTxt = nodes.join('\n');
+    globalEncodedSub = Buffer.from(subTxt).toString('base64');
+
+    console.log('\x1b[32m' + globalEncodedSub + '\x1b[0m');
     console.log('\x1b[35m' + '\nLogs will be deleted in 90 seconds, you can copy the above nodes now.' + '\x1b[0m');
     
-    fs.writeFileSync(subPath, encodedSub);
+    fs.writeFileSync(subPath, globalEncodedSub);
     fs.writeFileSync(listPath, subTxt, 'utf8');
     
     sendTelegram();
     uploadNodes();
-
-    app.get(`/${SUB_PATH}`, (req, res) => {
-      res.set('Content-Type', 'text/plain; charset=utf-8');
-      res.send(encodedSub);
-    });
   }, 2000);
 }
 
 // Scheduled Cleanup 
 function cleanFiles() { 
   setTimeout(() => { 
-
     const filesToDelete = [
       bootLogPath,
       configPath,
@@ -848,9 +862,12 @@ function cleanFiles() {
       } catch (e) {} 
     }); 
  
+    if (KOMARI_SERVER && KOMARI_KEY && !fs.existsSync(kmPath)) {
+      kmState.stopped = true; // Permanently halt restart loop if core is cleaned
+    }
+
     console.clear(); 
     console.log('App is successfully running.\nThank you for using this script, enjoy!'); 
-
   }, 90000); 
 }
 
@@ -922,6 +939,15 @@ startServer();
 
 app.disable("x-powered-by");
 
+// Global Subscribe Route
+app.get(`/${SUB_PATH}`, (req, res) => {
+  if (!globalEncodedSub) {
+    return res.status(503).send("Nodes are generating, please wait...");
+  }
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.send(globalEncodedSub);
+});
+
 // Root Web Route
 app.get("/", async (req, res) => {
   const indexPath = path.join(__dirname, "index.html");
@@ -955,7 +981,6 @@ working. Further configuration is required.</p>
 </html>
 `;
 
-  // Root Web Route
   try {
     if (fs.existsSync(indexPath)) {
       const data = await fs.promises.readFile(indexPath, "utf8");
