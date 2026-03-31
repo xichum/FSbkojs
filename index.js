@@ -25,7 +25,9 @@ function parseBool(val, defaultVal) {
 
 const AUTO_ACCESS = parseBool(process.env.AUTO_ACCESS, false);
 const YT_WARPOUT = parseBool(process.env.YT_WARPOUT, false);
-const FILE_PATH = process.env.FILE_PATH || '.cache';
+
+// 【核心修复】：使用 path.resolve 将路径强制转为绝对路径，彻底杜绝 spawn ENOENT 报错
+const FILE_PATH = path.resolve(process.env.FILE_PATH || '.cache');
 const SUB_PATH = process.env.SUB_PATH || 'subb';
 
 const UUID = process.env.UUID || '26fbd6ba-3660-4058-a3c2-310bef5419fd';
@@ -79,8 +81,9 @@ let socksPassword = '';
 let hy2Password = '';
 let useCustomCert = false;
 let domainName = '';
-let GLOBAL_SERVER_IP = '';
+let GLOBAL_SERVER_IP = ''; // 全局保存第一时间的IP
 
+// 第一时间获取并打印服务器IP地址
 async function fetchServerIP() {
   console.log("\x1b[33m[System] Fetching server IP address...\x1b[0m");
   try {
@@ -118,7 +121,7 @@ const botRandomName = generateRandomName();
 const phpRandomName = generateRandomName();
 const kmRandomName = generateRandomName();
 
-// Paths
+// Paths (由于上方 FILE_PATH 已转绝对路径，这些变量现在也全部都是绝对路径)
 const npmPath = path.join(FILE_PATH, npmRandomName);
 const phpPath = path.join(FILE_PATH, phpRandomName);
 const webPath = path.join(FILE_PATH, webRandomName);
@@ -625,31 +628,39 @@ uuid: ${UUID}`;
   // Run Nezha
   if (NEZHA_SERVER && NEZHA_PORT && NEZHA_KEY) {
     const nTls = tlsPorts.has(NEZHA_PORT) ? '--tls' : '';
-    const cmd = `nohup ${npmPath} -s ${NEZHA_SERVER}:${NEZHA_PORT} -p ${NEZHA_KEY} ${nTls} --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &`;
+    const cmd = `nohup "${npmPath}" -s ${NEZHA_SERVER}:${NEZHA_PORT} -p ${NEZHA_KEY} ${nTls} --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &`;
     exec(cmd, () => {});
     console.log('Nezha Agent is running');
   } else if (NEZHA_SERVER && NEZHA_KEY) {
-    exec(`nohup ${phpPath} -c "${FILE_PATH}/config.yaml" >/dev/null 2>&1 &`, () => {});
+    exec(`nohup "${phpPath}" -c "${FILE_PATH}/config.yaml" >/dev/null 2>&1 &`, () => {});
     console.log('Nezha Agent is running');
   }
 
+  // ==========================================
+  // 【完美修复区】使用基于绝对路径的进程拉起方案
+  // 彻底避免极简/Docker环境中因相对路径导致的 ENOENT 报错
+  // ==========================================
   if (KOMARI_SERVER && KOMARI_KEY) {
     try {
       const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
       console.log(`[Komari] Bootstrapping agent for ${kServer}...`);
       
+      // 添加文件检测：如果由于特殊原因文件丢失，能够直接打印原因而不是报 ENOENT
+      if (!fs.existsSync(kmPath)) {
+         throw new Error(`Binary file not found at: ${kmPath}`);
+      }
+      
       const kmProc = spawn(kmPath, ['-e', kServer, '-t', KOMARI_KEY], {
         detached: true,
         stdio: 'ignore',
-        env: process.env,
-        cwd: FILE_PATH
+        env: process.env
       });
 
       kmProc.on('error', (err) => {
         console.error(`[Komari ERR] Failed to start process: ${err.message}`);
       });
 
-      kmProc.unref();
+      kmProc.unref(); 
       console.log(`[Komari] Agent spawned successfully in detached mode.`);
     } catch (error) {
       console.error(`[Komari ERR] Execution setup failed: ${error.message}`);
@@ -657,7 +668,7 @@ uuid: ${UUID}`;
   }
 
   // Run Core Service
-  exec(`nohup ${webPath} run -c ${configPath} >/dev/null 2>&1 &`, () => {});
+  exec(`nohup "${webPath}" run -c "${configPath}" >/dev/null 2>&1 &`, () => {});
   console.log('Web service is running');
 
   // Run Cloudflared Bot
@@ -666,11 +677,11 @@ uuid: ${UUID}`;
     if (ARGO_AUTH.match(/^[A-Z0-9a-z=]{120,250}$/)) {
       args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token ${ARGO_AUTH}`;
     } else if (ARGO_AUTH.match(/TunnelSecret/)) {
-      args = `tunnel --edge-ip-version auto --config ${path.join(FILE_PATH, 'tunnel.yml')} run`;
+      args = `tunnel --edge-ip-version auto --config "${path.join(FILE_PATH, 'tunnel.yml')}" run`;
     } else {
-      args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_PORT}`;
+      args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile "${bootLogPath}" --loglevel info --url http://localhost:${ARGO_PORT}`;
     }
-    exec(`nohup ${botPath} ${args} >/dev/null 2>&1 &`, () => {});
+    exec(`nohup "${botPath}" ${args} >/dev/null 2>&1 &`, () => {});
     console.log('Bot is running');
   }
 
@@ -708,8 +719,8 @@ async function extractDomains() {
           fs.unlinkSync(bootLogPath);
           try { await execPromise(`pkill -f "${botRandomName}" > /dev/null 2>&1`); } catch (err) {}
           await new Promise(r => setTimeout(r, 1000));
-          const args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_PORT}`;
-          exec(`nohup ${botPath} ${args} >/dev/null 2>&1 &`);
+          const args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile "${bootLogPath}" --loglevel info --url http://localhost:${ARGO_PORT}`;
+          exec(`nohup "${botPath}" ${args} >/dev/null 2>&1 &`);
           setTimeout(() => extractDomains(), 6000);
         }
       } else {
@@ -884,7 +895,7 @@ async function addVisitTask() {
 
 // Initialize Application
 async function startServer() {
-  await fetchServerIP();
+  await fetchServerIP(); // 输出执行的第一步：提前获取服务器IP全局调用
   deleteNodes();
   cleanupOldFiles();
   argoType();
