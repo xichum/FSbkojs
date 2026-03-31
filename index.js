@@ -28,7 +28,7 @@ const YT_WARPOUT = parseBool(process.env.YT_WARPOUT, false);
 const FILE_PATH = process.env.FILE_PATH || '.cache';
 const SUB_PATH = process.env.SUB_PATH || 'subb';
 
-const UUID = process.env.UUID || '26fbd6ba-3660-4058-a3c2-310bef5419fd';
+const UUID = process.env.UUID || '26fbd6ba-3560-4058-a3c2-310bef5419fd';
 const KOMARI_SERVER = process.env.KOMARI_SERVER || ''; // e.g. https://km.example.com
 const KOMARI_KEY = process.env.KOMARI_KEY || '';
 const NEZHA_SERVER = process.env.NEZHA_SERVER || '';
