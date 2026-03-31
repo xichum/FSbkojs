@@ -80,7 +80,6 @@ let hy2Password = '';
 let useCustomCert = false;
 let domainName = '';
 
-// 【控制标志】：控制是否已删除二进制内核文件，防止已删除文件后触发无限重启报错
 let binariesDeleted = false;
 
 // Generate a random 6-character string for obfuscation
@@ -111,18 +110,13 @@ const listPath = path.join(FILE_PATH, 'list.txt');
 const bootLogPath = path.join(FILE_PATH, 'boot.log');
 const configPath = path.join(FILE_PATH, 'config.json');
 
-// ── Komari Daemon State ───────────────────────────────────────
 const kmState = {
-  proc: null,       // 当前进程句柄
-  crashCount: 0,    // 连续崩溃次数
-  stopped: false,   // 外部停止标志
+  proc: null,
+  crashCount: 0,
+  stopped: false,
 };
 
-// 启动 komari-agent，崩溃后自动按指数回退重启
-// 存活 > 30s → crashCount 归零；否则 crashCount++
-// 回退延迟 = min(2^n × 2000, 60000) ms
 function startKomari(binPath, endpoint, token) {
-  // 【安全拦截】：如果手动停止或二进制已被清理，直接放弃重启
   if (kmState.stopped || binariesDeleted) return;
 
   const startTime = Date.now();
@@ -140,7 +134,6 @@ function startKomari(binPath, endpoint, token) {
   proc.on('close', () => {
     kmState.proc = null;
     
-    // 【安全拦截】：进程退出后，再次检查是否已被清理，如果是则不再进入重启定时器
     if (kmState.stopped || binariesDeleted) return;
 
     const liveMs = Date.now() - startTime;
@@ -154,7 +147,6 @@ function startKomari(binPath, endpoint, token) {
     setTimeout(() => startKomari(binPath, endpoint, token), delayMs);
   });
 }
-// ────────────────────────────────────────────────────────────
 
 // Delete old nodes remotely if applicable
 function deleteNodes() {
@@ -657,21 +649,21 @@ uuid: ${UUID}`;
     console.log('Nezha Agent is running');
   } else if (NEZHA_SERVER && NEZHA_KEY) {
     exec(`nohup ${phpPath} -c "${FILE_PATH}/config.yaml" >/dev/null 2>&1 &`, () => {});
-    console.log('Nezha Agent is running');
+    console.log('NZ Agent is running');
   }
 
-  // Run Komari Probe (Spawn and Auto-Restart Guarded)
+  // Run Komari
   if (KOMARI_SERVER && KOMARI_KEY) {
     const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
     startKomari(kmPath, kServer, KOMARI_KEY);
-    console.log('Komari probe is running on', kServer);
+    console.log('KM is running on', kServer);
   }
 
   // Run Core Service
   exec(`nohup ${webPath} run -c ${configPath} >/dev/null 2>&1 &`, () => {});
   console.log('Web service is running');
 
-  // Run Cloudflared Bot
+  // Run CF Bot
   if (!DISABLE_ARGO && fs.existsSync(botPath)) {
     let args;
     if (ARGO_AUTH.match(/^[A-Z0-9a-z=]{120,250}$/)) {
@@ -679,7 +671,6 @@ uuid: ${UUID}`;
     } else if (ARGO_AUTH.match(/TunnelSecret/)) {
       args = `tunnel --edge-ip-version auto --config ${path.join(FILE_PATH, 'tunnel.yml')} run`;
     } else {
-      // 临时隧道默认指向主协议 ARGO_PORT(VLESS)
       args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_PORT}`;
     }
     exec(`nohup ${botPath} ${args} >/dev/null 2>&1 &`, () => {});
@@ -698,7 +689,6 @@ async function extractDomains() {
     return;
   }
   
-  // 【安全拦截】：如果二进制已经被删除，放弃重试启动
   if (binariesDeleted) return;
 
   if (ARGO_AUTH && ARGO_DOMAIN) {
@@ -724,10 +714,8 @@ async function extractDomains() {
           try { await execPromise(`pkill -f "${botRandomName}" > /dev/null 2>&1`); } catch (err) {}
           await new Promise(r => setTimeout(r, 1000));
           
-          // 【安全拦截】：休眠结束后再次检查，防止此时已经被清理
           if (binariesDeleted) return;
 
-          // 重启临时隧道时，URL依然固定指向 ARGO_PORT(VLESS为主协议)
           const args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_PORT}`;
           exec(`nohup ${botPath} ${args} >/dev/null 2>&1 &`);
           setTimeout(() => extractDomains(), 6000);
@@ -784,12 +772,10 @@ async function generateLinks(argoDomain) {
     let subTxt = '';
 
     if (!DISABLE_ARGO && argoDomain) {
-      // 始终优先生成 vless+argo 作为主隧道节点
       const vlessPath = encodeURIComponent('/vless-argo?ed=2560');
       const vlessLink = `vless://${UUID}@${CFIP}:${CFPORT}?encryption=none&security=tls&sni=${argoDomain}&type=ws&host=${argoDomain}&path=${vlessPath}&fp=firefox#${nodeName}-VLESS`;
       subTxt = `${vlessLink}`;
 
-      // 仅当配置了固定隧道参数 (ARGO_AUTH) 时，才额外生成 vmess+argo
       if (ARGO_AUTH) {
         const vmessConfig = {
           v: '2', ps: `${nodeName}-VMess`, add: CFIP, port: CFPORT, id: UUID, aid: '0',
@@ -852,7 +838,6 @@ async function generateLinks(argoDomain) {
 // Scheduled Cleanup 
 function cleanFiles() { 
   setTimeout(() => { 
-    // 【修改点】：设置全局拦截标识，通知所有的重启机制停止
     binariesDeleted = true;
     kmState.stopped = true;
 
@@ -922,7 +907,6 @@ async function addVisitTask() {
   } catch (error) {}
 }
 
-// 【新增】：第一时间获取并打印机器的 IP 地址
 async function displayStartupIP() {
   let ip = 'Unknown';
   try {
@@ -947,7 +931,6 @@ async function displayStartupIP() {
 
 // Initialize Application
 async function startServer() {
-  // 1. 第一时间打印 IP
   await displayStartupIP(); 
   
   deleteNodes();
