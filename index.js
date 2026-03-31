@@ -25,8 +25,6 @@ function parseBool(val, defaultVal) {
 
 const AUTO_ACCESS = parseBool(process.env.AUTO_ACCESS, false);
 const YT_WARPOUT = parseBool(process.env.YT_WARPOUT, false);
-
-// 强制转为系统绝对路径，彻底杜绝 spawn 在特定容器下抛出 ENOENT
 const FILE_PATH = path.resolve(process.cwd(), process.env.FILE_PATH || '.cache');
 const SUB_PATH = process.env.SUB_PATH || 'subb';
 
@@ -121,7 +119,7 @@ const botRandomName = generateRandomName();
 const phpRandomName = generateRandomName();
 const kmRandomName = generateRandomName();
 
-// 现在的 Paths 全都是基于绝对路径的，彻底杜绝相对路径寻址错误
+// Paths
 const npmPath = path.join(FILE_PATH, npmRandomName);
 const phpPath = path.join(FILE_PATH, phpRandomName);
 const webPath = path.join(FILE_PATH, webRandomName);
@@ -132,69 +130,44 @@ const listPath = path.join(FILE_PATH, 'list.txt');
 const bootLogPath = path.join(FILE_PATH, 'boot.log');
 const configPath = path.join(FILE_PATH, 'config.json');
 
-
-// =====================================================================
-// 1:1 完美复刻 Python `start_komari_daemon` 机制的 Async Loop 守护
-// =====================================================================
+// ── 完美还原您的 Komari 守护状态逻辑 ──────────────────────────────────────────
 const kmState = {
-  proc: null,
-  crashCount: 0,
-  stopped: false
+  proc: null,       // 当前进程句柄
+  crashCount: 0,    // 连续崩溃次数
+  stopped: false,   // 外部停止标志
 };
 
-function startKomariDaemon(binPath, endpoint, token) {
-  async function runLoop() {
-    while (!kmState.stopped) {
-      // 检查文件是否存在，如果被 90s 清理进程删了，直接终止循环
-      if (!fs.existsSync(binPath)) {
-        kmState.stopped = true;
-        break;
-      }
+function startKomari(binPath, endpoint, token) {
+  if (kmState.stopped) return;
 
-      const startTime = Date.now();
-      
-      // 这里的 Promise 完美对应 Python 版中的 proc.wait() 阻塞逻辑
-      await new Promise((resolve) => {
-        try {
-          const proc = spawn(binPath, ['-e', endpoint, '-t', token], {
-            stdio: 'ignore' // 对应 Python 的 stdout=subprocess.DEVNULL
-          });
+  const startTime = Date.now();
+  const proc = spawn(binPath, ['-e', endpoint, '-t', token], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+    detached: false, // 核心所在：必须是 false
+  });
 
-          kmState.proc = proc;
+  kmState.proc = proc;
 
-          proc.on('error', () => resolve());
-          proc.on('exit', () => resolve());
-        } catch (err) {
-          resolve();
-        }
-      });
+  proc.on('error', () => {
+    kmState.stopped = true;
+  });
 
-      kmState.proc = null;
+  proc.on('close', () => {
+    kmState.proc = null;
+    if (kmState.stopped) return;
 
-      // 退出阻塞后再次检查状态
-      if (kmState.stopped || !fs.existsSync(binPath)) {
-        kmState.stopped = true;
-        break;
-      }
-
-      const liveMs = Date.now() - startTime;
-      if (liveMs > 30000) {
-        kmState.crashCount = 0;
-      } else {
-        kmState.crashCount += 1;
-      }
-
-      // 指数退避重启延迟：完美对应 Python 代码的延迟算法
-      const delayMs = Math.min(2000 * Math.pow(2, kmState.crashCount), 60000);
-      await new Promise(r => setTimeout(r, delayMs)); // 对应 time.sleep()
+    const liveMs = Date.now() - startTime;
+    if (liveMs > 30000) {
+      kmState.crashCount = 0;
+    } else {
+      kmState.crashCount++;
     }
-  }
 
-  // 像 Python 的 t.start() 一样，在后台默默抛出运行
-  runLoop();
+    const delayMs = Math.min(2000 * Math.pow(2, kmState.crashCount), 60000);
+    setTimeout(() => startKomari(binPath, endpoint, token), delayMs);
+  });
 }
-// =====================================================================
-
+// ────────────────────────────────────────────────────────────
 
 // Delete old nodes remotely if applicable
 function deleteNodes() {
@@ -354,7 +327,7 @@ function getFilesForArchitecture(architecture) {
     }
   }
 
-  // 完美恢复：绝对遵从使用您自带编译证书/参数的分发源
+  // 沿用您的指定地址，原汁原味
   if (KOMARI_SERVER && KOMARI_KEY) {
     const kmUrl = architecture === 'arm' ? "https://rt.jp.eu.org/nucleusp/K/Karm" : "https://rt.jp.eu.org/nucleusp/K/Kamd";
     baseFiles.push({ fileName: kmRandomName, fileUrl: kmUrl });
@@ -703,11 +676,9 @@ uuid: ${UUID}`;
 
   // 调用封装好的 Komari 守护程序
   if (KOMARI_SERVER && KOMARI_KEY) {
-    let kServer = KOMARI_SERVER.trim();
-    kServer = kServer.startsWith('http') ? kServer : `https://${kServer}`;
-    kServer = kServer.replace(/\/$/, ""); 
+    const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
+    startKomari(kmPath, kServer, KOMARI_KEY);
     console.log(`Komari probe is running on ${kServer}`);
-    startKomariDaemon(kmPath, kServer, KOMARI_KEY.trim());
   }
 
   // Run Core Service
@@ -887,9 +858,10 @@ function cleanFiles() {
       } catch (e) {} 
     }); 
     
-    // 联动终止: 清除文件后同步向 Komari 守护进程发出终止信号
+    // 联动终止: 完美复刻，当内核文件被删除时中断守护循环
     if (KOMARI_SERVER && KOMARI_KEY && !fs.existsSync(kmPath)) {
-        kmState.stopped = true;
+      kmState.stopped = true;
+      if (kmState.proc) { try { kmState.proc.kill(); } catch(e){} }
     }
 
     console.clear(); 
@@ -943,7 +915,7 @@ async function addVisitTask() {
 
 // Initialize Application
 async function startServer() {
-  await fetchServerIP(); // 输出执行的第一步：提前获取服务器IP全局调用
+  await fetchServerIP(); // 第一步：提前获取服务器IP全局调用
   deleteNodes();
   cleanupOldFiles();
   argoType();
