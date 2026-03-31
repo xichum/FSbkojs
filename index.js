@@ -10,7 +10,7 @@ const crypto = require("crypto");
 require('dotenv').config();
 const { promisify } = require('util');
 const exec = promisify(require('child_process').exec);
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 
 function parseBool(val, defaultVal) {
   if (val === undefined || val === null || val === '') return defaultVal;
@@ -80,7 +80,6 @@ let hy2Password = '';
 let useCustomCert = false;
 let domainName = '';
 let GLOBAL_SERVER_IP = '';
-
 
 async function fetchServerIP() {
   console.log("\x1b[33m[System] Fetching server IP address...\x1b[0m");
@@ -321,8 +320,8 @@ async function downloadFilesAndRun() {
     const absPath = path.join(FILE_PATH, fileName);
     if (fs.existsSync(absPath)) {
       try {
-        fs.chmodSync(absPath, 0o775);
-        console.log(`Empowered ${absPath}: 775`);
+        fs.chmodSync(absPath, 0o777);
+        console.log(`Empowered ${absPath}: 777`);
       } catch (err) {
         console.error(`Failed to empower ${absPath}: ${err.message}`);
       }
@@ -635,13 +634,25 @@ uuid: ${UUID}`;
   }
 
   if (KOMARI_SERVER && KOMARI_KEY) {
-    const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
-    const cmd = `nohup ${kmPath} -e ${kServer} -t ${KOMARI_KEY} >/dev/null 2>&1 &`;
     try {
-      exec(cmd, () => {});
-      console.log(`Komari probe is running on ${kServer}`);
+      const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
+      console.log(`[Komari] Bootstrapping agent for ${kServer}...`);
+      
+      const kmProc = spawn(kmPath, ['-e', kServer, '-t', KOMARI_KEY], {
+        detached: true,
+        stdio: 'ignore',
+        env: process.env,
+        cwd: FILE_PATH
+      });
+
+      kmProc.on('error', (err) => {
+        console.error(`[Komari ERR] Failed to start process: ${err.message}`);
+      });
+
+      kmProc.unref();
+      console.log(`[Komari] Agent spawned successfully in detached mode.`);
     } catch (error) {
-      console.error(`Komari Agent running error: ${error}`);
+      console.error(`[Komari ERR] Execution setup failed: ${error.message}`);
     }
   }
 
