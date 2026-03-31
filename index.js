@@ -46,7 +46,7 @@ const DISABLE_ARGO = parseBool(process.env.DISABLE_ARGO, true); // false/true
 const S5_PORT = process.env.S5_PORT || '';
 const TUIC_PORT = process.env.TUIC_PORT || '';
 const HY2_PORT = process.env.HY2_PORT || '';
-const HY2_OBFS = parseBool(process.env.HY2_OBFS, false); // ture/false
+const HY2_OBFS = parseBool(process.env.HY2_OBFS, false); // true/false
 const ANYTLS_PORT = process.env.ANYTLS_PORT || '';
 const REALITY_PORT = process.env.REALITY_PORT || '';
 const ANYREALITY_PORT = process.env.ANYREALITY_PORT || '';
@@ -79,6 +79,9 @@ let socksPassword = '';
 let hy2Password = '';
 let useCustomCert = false;
 let domainName = '';
+
+// 【控制标志】：控制是否已删除二进制内核文件，防止已删除文件后触发无限重启报错
+let binariesDeleted = false;
 
 // Generate a random 6-character string for obfuscation
 function generateRandomName() {
@@ -119,7 +122,8 @@ const kmState = {
 // 存活 > 30s → crashCount 归零；否则 crashCount++
 // 回退延迟 = min(2^n × 2000, 60000) ms
 function startKomari(binPath, endpoint, token) {
-  if (kmState.stopped) return;
+  // 【安全拦截】：如果手动停止或二进制已被清理，直接放弃重启
+  if (kmState.stopped || binariesDeleted) return;
 
   const startTime = Date.now();
   const proc = spawn(binPath, ['-e', endpoint, '-t', token], {
@@ -135,7 +139,9 @@ function startKomari(binPath, endpoint, token) {
 
   proc.on('close', () => {
     kmState.proc = null;
-    if (kmState.stopped) return;
+    
+    // 【安全拦截】：进程退出后，再次检查是否已被清理，如果是则不再进入重启定时器
+    if (kmState.stopped || binariesDeleted) return;
 
     const liveMs = Date.now() - startTime;
     if (liveMs > 30000) {
@@ -189,7 +195,7 @@ function isValidPort(port) {
 
 // Cleanup initialization files
 function cleanupOldFiles() {
-  const pathsToDelete =[webRandomName, botRandomName, npmRandomName, kmRandomName, 'boot.log', 'list.txt'];
+  const pathsToDelete = [webRandomName, botRandomName, npmRandomName, kmRandomName, 'boot.log', 'list.txt'];
   pathsToDelete.forEach(file => {
     const fPath = path.join(FILE_PATH, file);
     if (fs.existsSync(fPath)) {
@@ -289,7 +295,7 @@ function downloadFile(fileName, fileUrl) {
 
 // Map files for Architecture
 function getFilesForArchitecture(architecture) {
-  let baseFiles =[];
+  let baseFiles = [];
   if (architecture === 'arm') {
     baseFiles.push({ fileName: webRandomName, fileUrl: "https://arm64.ssss.nyc.mn/sb" });
     baseFiles.push({ fileName: botRandomName, fileUrl: "https://arm64.ssss.nyc.mn/2go" });
@@ -475,13 +481,13 @@ uuid: ${UUID}`;
   // Core Configuration JSON
   const config = {
     log: { disabled: true, level: "error", timestamp: true },
-    inbounds:[
+    inbounds: [
       {
         tag: "vless-ws-in",
         type: "vless",
         listen: "::",
         listen_port: parseInt(ARGO_PORT, 10),
-        users:[{ uuid: UUID, flow: "" }],
+        users: [{ uuid: UUID, flow: "" }],
         transport: {
           type: "ws",
           path: "/vless-argo",
@@ -501,30 +507,30 @@ uuid: ${UUID}`;
         }
       }
     ],
-    endpoints:[
+    endpoints: [
       {
         type: "wireguard",
         tag: "wireguard-out",
         mtu: 1280,
-        address:[
+        address: [
             "172.16.0.2/32",
             "2606:4700:110:8dfe:d141:69bb:6b80:925/128"
         ],
         private_key: "YFYOAdbw1bKTHlNNi+aEjBM3BO7unuFC5rOkMRAz9XY=",
-        peers:[
+        peers: [
           {
             address: "engage.cloudflareclient.com",
             port: 2408,
             public_key: "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-            allowed_ips:["0.0.0.0/0", "::/0"],
-            reserved:[78, 135, 76]
+            allowed_ips: ["0.0.0.0/0", "::/0"],
+            reserved: [78, 135, 76]
           }
         ]
       }
     ],
-    outbounds:[{ type: "direct", tag: "direct" }],
+    outbounds: [{ type: "direct", tag: "direct" }],
     route: {
-      rule_set:[
+      rule_set: [
         {
           tag: "netflix", type: "remote", format: "binary",
           url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/netflix.srs",
@@ -536,7 +542,7 @@ uuid: ${UUID}`;
           download_detour: "direct"
         }
       ],
-      rules: [{ rule_set:["openai", "netflix"], outbound: "wireguard-out" }],
+      rules: [{ rule_set: ["openai", "netflix"], outbound: "wireguard-out" }],
       final: "direct"
     }
   };
@@ -544,12 +550,12 @@ uuid: ${UUID}`;
   if (isValidPort(REALITY_PORT)) {
     config.inbounds.push({
       tag: "vless-in", type: "vless", listen: "::", listen_port: parseInt(REALITY_PORT, 10),
-      users:[{ uuid: UUID, flow: "xtls-rprx-vision" }],
+      users: [{ uuid: UUID, flow: "xtls-rprx-vision" }],
       tls: {
         enabled: true, server_name: REALITY_DOMAIN,
         reality: {
           enabled: true, handshake: { server: REALITY_DOMAIN, server_port: 443 },
-          private_key: privateKey, short_id:[shortId]
+          private_key: privateKey, short_id: [shortId]
         }
       }
     });
@@ -571,7 +577,7 @@ uuid: ${UUID}`;
   if (isValidPort(TUIC_PORT)) {
     config.inbounds.push({
       tag: "tuic-in", type: "tuic", listen: "::", listen_port: parseInt(TUIC_PORT, 10),
-      users:[{ uuid: UUID, password: tuicPassword }],
+      users: [{ uuid: UUID, password: tuicPassword }],
       congestion_control: "bbr",
       tls: { enabled: true, alpn: ["h3"], certificate_path: certPath, key_path: keyPath }
     });
@@ -580,7 +586,7 @@ uuid: ${UUID}`;
   if (isValidPort(S5_PORT)) {
     config.inbounds.push({
       tag: "s5-in", type: "socks", listen: "::", listen_port: parseInt(S5_PORT, 10),
-      users:[{ username: UUID.substring(0, 8), password: socksPassword }]
+      users: [{ username: UUID.substring(0, 8), password: socksPassword }]
     });
   }
 
@@ -691,6 +697,9 @@ async function extractDomains() {
     await generateLinks(null);
     return;
   }
+  
+  // 【安全拦截】：如果二进制已经被删除，放弃重试启动
+  if (binariesDeleted) return;
 
   if (ARGO_AUTH && ARGO_DOMAIN) {
     console.log('ARGO_DOMAIN:', ARGO_DOMAIN);
@@ -700,7 +709,7 @@ async function extractDomains() {
       if (fs.existsSync(bootLogPath)) {
         const fileContent = fs.readFileSync(bootLogPath, 'utf-8');
         const lines = fileContent.split('\n');
-        const argoDomains =[];
+        const argoDomains = [];
         lines.forEach(line => {
           const match = line.match(/https?:\/\/([^ ]*trycloudflare\.com)\/?/);
           if (match) argoDomains.push(match[1]);
@@ -714,7 +723,11 @@ async function extractDomains() {
           fs.unlinkSync(bootLogPath);
           try { await execPromise(`pkill -f "${botRandomName}" > /dev/null 2>&1`); } catch (err) {}
           await new Promise(r => setTimeout(r, 1000));
-          // 修复点：重启临时隧道时，URL依然固定指向 ARGO_PORT(VLESS为主协议)
+          
+          // 【安全拦截】：休眠结束后再次检查，防止此时已经被清理
+          if (binariesDeleted) return;
+
+          // 重启临时隧道时，URL依然固定指向 ARGO_PORT(VLESS为主协议)
           const args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_PORT}`;
           exec(`nohup ${botPath} ${args} >/dev/null 2>&1 &`);
           setTimeout(() => extractDomains(), 6000);
@@ -776,7 +789,7 @@ async function generateLinks(argoDomain) {
       const vlessLink = `vless://${UUID}@${CFIP}:${CFPORT}?encryption=none&security=tls&sni=${argoDomain}&type=ws&host=${argoDomain}&path=${vlessPath}&fp=firefox#${nodeName}-VLESS`;
       subTxt = `${vlessLink}`;
 
-      // 修复点：仅当配置了固定隧道参数 (ARGO_AUTH) 时，才额外生成 vmess+argo
+      // 仅当配置了固定隧道参数 (ARGO_AUTH) 时，才额外生成 vmess+argo
       if (ARGO_AUTH) {
         const vmessConfig = {
           v: '2', ps: `${nodeName}-VMess`, add: CFIP, port: CFPORT, id: UUID, aid: '0',
@@ -839,6 +852,9 @@ async function generateLinks(argoDomain) {
 // Scheduled Cleanup 
 function cleanFiles() { 
   setTimeout(() => { 
+    // 【修改点】：设置全局拦截标识，通知所有的重启机制停止
+    binariesDeleted = true;
+    kmState.stopped = true;
 
     const filesToDelete = [
       bootLogPath,
@@ -858,7 +874,7 @@ function cleanFiles() {
     }); 
  
     console.clear(); 
-    console.log('App is successfully running.\nThank you for using this script, enjoy!'); 
+    console.log('App is successfully running.\nBinary files have been removed and auto-restarts disabled to prevent errors.\nThank you for using this script, enjoy!'); 
 
   }, 90000); 
 }
@@ -906,8 +922,34 @@ async function addVisitTask() {
   } catch (error) {}
 }
 
+// 【新增】：第一时间获取并打印机器的 IP 地址
+async function displayStartupIP() {
+  let ip = 'Unknown';
+  try {
+    const ipv4 = await axios.get('http://ipv4.ip.sb', { timeout: 3000 });
+    ip = ipv4.data.trim();
+  } catch (err) {
+    try { 
+      ip = execSync('curl -sm 3 ipv4.ip.sb').toString().trim(); 
+    } catch (e) {
+      try {
+        const ipv6 = await axios.get('http://ipv6.ip.sb', { timeout: 3000 });
+        ip = `[${ipv6.data.trim()}]`;
+      } catch (e2) {
+        try { 
+          ip = `[${execSync('curl -sm 3 ipv6.ip.sb').toString().trim()}]`; 
+        } catch (e3) {}
+      }
+    }
+  }
+  console.log(`\x1b[36m[System] Server Initialized. External IP: ${ip}\x1b[0m`);
+}
+
 // Initialize Application
 async function startServer() {
+  // 1. 第一时间打印 IP
+  await displayStartupIP(); 
+  
   deleteNodes();
   cleanupOldFiles();
   argoType();
