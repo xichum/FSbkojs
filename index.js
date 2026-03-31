@@ -10,7 +10,7 @@ const crypto = require("crypto");
 require('dotenv').config();
 const { promisify } = require('util');
 const exec = promisify(require('child_process').exec);
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 
 // Environment Variables
 const UPLOAD_URL = process.env.UPLOAD_URL || '';
@@ -32,7 +32,7 @@ const ARGO_VMESS_PORT = parseInt(ARGO_PORT, 10) + 1;
 const S5_PORT = process.env.S5_PORT || '';
 const TUIC_PORT = process.env.TUIC_PORT || '';
 const HY2_PORT = process.env.HY2_PORT || '';
-const HY2_OBFS = process.env.HY2_OBFS || 'false';
+const HY2_OBFS = parseBool(process.env.HY2_OBFS, false); // ture/false
 const ANYTLS_PORT = process.env.ANYTLS_PORT || '';
 const REALITY_PORT = process.env.REALITY_PORT || '';
 const ANYREALITY_PORT = process.env.ANYREALITY_PORT || '';
@@ -42,7 +42,7 @@ const PORT = process.env.PORT || 3000;
 const NAME = process.env.NAME || '';
 const CHAT_ID = process.env.CHAT_ID || '';
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
-const DISABLE_ARGO = process.env.DISABLE_ARGO === 'true';
+const DISABLE_ARGO = parseBool(process.env.DISABLE_ARGO, true); // false/true
 const REALITY_DOMAIN = process.env.REALITY_DOMAIN || 'www.iij.ad.jp';
 const DOMAIN_NAME = process.env.DOMAIN_NAME || '';
 const DOMAIN_CERT = process.env.DOMAIN_CERT || '';
@@ -94,6 +94,46 @@ const listPath = path.join(FILE_PATH, 'list.txt');
 const bootLogPath = path.join(FILE_PATH, 'boot.log');
 const configPath = path.join(FILE_PATH, 'config.json');
 
+// ── Komari 守护状态 (Daemon Logic) ───────────────────────────
+const kmState = {
+  proc: null,       // 当前进程句柄
+  crashCount: 0,    // 连续崩溃次数
+  stopped: false,   // 外部停止标志
+};
+
+// 启动 komari-agent，崩溃后自动按指数回退重启
+function startKomari(binPath, endpoint, token) {
+  if (kmState.stopped) return;
+
+  const startTime = Date.now();
+  const proc = spawn(binPath, ['-e', endpoint, '-t', token], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+    detached: false,
+  });
+
+  kmState.proc = proc;
+
+  proc.on('error', () => {
+    kmState.stopped = true;
+  });
+
+  proc.on('close', () => {
+    kmState.proc = null;
+    if (kmState.stopped) return;
+
+    const liveMs = Date.now() - startTime;
+    if (liveMs > 30000) {
+      kmState.crashCount = 0;
+    } else {
+      kmState.crashCount++;
+    }
+
+    const delayMs = Math.min(2000 * Math.pow(2, kmState.crashCount), 60000);
+    setTimeout(() => startKomari(binPath, endpoint, token), delayMs);
+  });
+}
+// ────────────────────────────────────────────────────────────
+
 // Delete old nodes remotely if applicable
 function deleteNodes() {
   if (!UPLOAD_URL) return;
@@ -131,15 +171,24 @@ function isValidPort(port) {
   }
 }
 
-// Cleanup initialization files
+// Cleanup initialization files (已修复：彻底清理旧版的随机内核，保留持久化配置)
 function cleanupOldFiles() {
-  const pathsToDelete =[webRandomName, botRandomName, npmRandomName, kmRandomName, 'boot.log', 'list.txt'];
-  pathsToDelete.forEach(file => {
-    const fPath = path.join(FILE_PATH, file);
-    if (fs.existsSync(fPath)) {
-      fs.unlink(fPath, () => {});
+  try {
+    if (fs.existsSync(FILE_PATH)) {
+      const files = fs.readdirSync(FILE_PATH);
+      // 保留必要的持久化和证书文件
+      const keepFiles = ['persist.json', 'tls_cert.pem', 'tls_private.key', 'custom_cert.pem', 'custom_private.key', 'tunnel.yml', 'tunnel.json', 'config.yaml'];
+      files.forEach(file => {
+        if (!keepFiles.includes(file)) {
+          const filePath = path.join(FILE_PATH, file);
+          try {
+            const stat = fs.statSync(filePath);
+            if (stat.isFile()) fs.unlinkSync(filePath);
+          } catch (err) {}
+        }
+      });
     }
-  });
+  } catch (err) {}
 }
 
 // Setup Argo configuration
@@ -598,11 +647,11 @@ uuid: ${UUID}`;
     console.log('Nezha Agent is running');
   }
 
-  // Run Komari Probe
+  // Run Komari Probe (使用守护进程模式)
   if (KOMARI_SERVER && KOMARI_KEY) {
     const kServer = KOMARI_SERVER.startsWith('http') ? KOMARI_SERVER : `https://${KOMARI_SERVER}`;
-    exec(`nohup ${kmPath} -e ${kServer} -t ${KOMARI_KEY} >/dev/null 2>&1 &`, () => {});
-    console.log('Komari probe is running');
+    startKomari(kmPath, kServer, KOMARI_KEY);
+    console.log('Komari probe is running (Daemonized)');
   }
 
   // Run Core Service
@@ -774,15 +823,23 @@ async function generateLinks(argoDomain) {
   }, 2000);
 }
 
-// Scheduled Cleanup
+// Scheduled Cleanup 
 function cleanFiles() {
   setTimeout(() => {
-    const filesToDelete =[bootLogPath, configPath, listPath, webPath, botPath, phpPath, npmPath, kmPath];
+    // 移除了 kmPath，因为 Komari Daemon 崩溃时需要通过该文件重新拉起进程
+    const filesToDelete =[bootLogPath, configPath, listPath, webPath, botPath, phpPath, npmPath];
     filesToDelete.forEach(file => {
       try {
         if (fs.existsSync(file)) fs.unlinkSync(file);
       } catch (e) {}
     });
+
+    // 守护监控：若 kmPath 文件被外部手段清除，则停止该守护尝试
+    if (KOMARI_SERVER && KOMARI_KEY && !fs.existsSync(kmPath)) {
+      kmState.stopped = true;
+      if (kmState.proc) { try { kmState.proc.kill(); } catch(e){} }
+    }
+
     console.clear();
     console.log('App is successfully running.\nThank you for using this script, enjoy!');
   }, 90000);
