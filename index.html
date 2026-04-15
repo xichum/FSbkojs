@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus | Ethereal</title>
+    
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%231a0b2e'/><path d='M50 20 L80 80 L20 80 Z' fill='none' stroke='%23d946ef' stroke-width='5'/><circle cx='50' cy='55' r='10' fill='%2300f3ff'/></svg>">
+
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <style>
+        :root {
+            --primary: #d946ef;
+            --accent: #00f3ff;
+            --text: #ffffff;
+            --glass-search: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+            user-select: none;
+            outline: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            height: 100vh;
+            overflow: hidden;
+            background: linear-gradient(125deg, #0f0518 0%, #2e1065 50%, #000000 100%);
+            background-size: 200% 200%;
+            animation: deepSpace 15s ease infinite;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text);
+        }
+
+        @keyframes deepSpace {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        #star-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .container {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 1200px;
+            height: 90vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 30px;
+        }
+
+        .clock-wrap {
+            text-align: center;
+            margin-bottom: 10px;
+        }
+
+        .time {
+            font-size: 4.5rem;
+            font-weight: 700;
+            letter-spacing: -2px;
+            text-shadow: 0 0 30px rgba(217, 70, 239, 0.6);
+            line-height: 1;
+        }
+
+        .date {
+            font-size: 1rem;
+            opacity: 0.8;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 5px;
+        }
+
+        .search-container {
+            width: 100%;
+            max-width: 600px;
+            position: relative;
+            z-index: 100;
+        }
+
+        .search-bar {
+            background: var(--glass-search);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50px;
+            height: 54px;
+            display: flex;
+            align-items: center;
+            padding: 0 6px;
+            backdrop-filter: blur(15px);
+            transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .search-bar:focus-within {
+            background: rgba(0, 0, 0, 0.6);
+            border-color: var(--primary);
+            box-shadow: 0 0 25px rgba(217, 70, 239, 0.4);
+            transform: scale(1.02);
+        }
+
+        .engine-icon {
+            width: 42px; height: 42px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            font-size: 1.1rem;
+            color: rgba(255,255,255,0.8);
+            transition: 0.3s;
+            margin-left: 5px;
+        }
+        .engine-icon:hover { color: #fff; background: rgba(255,255,255,0.1); }
+
+        .engine-menu {
+            position: absolute;
+            top: 120%; left: 10px;
+            background: rgba(15, 5, 24, 0.95);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 8px;
+            width: 140px;
+            display: none;
+            flex-direction: column;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+        .engine-icon:hover .engine-menu, .engine-menu:hover { display: flex; }
+
+        .eng-opt {
+            padding: 10px;
+            font-size: 0.9rem;
+            color: #aaa;
+            cursor: pointer;
+            border-radius: 8px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .eng-opt:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+        .search-inp {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 1.1rem;
+            padding: 0 15px;
+        }
+        .search-inp::placeholder { color: rgba(255,255,255,0.4); }
+
+        .search-btn {
+            width: 42px; height: 42px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary), #8b5cf6);
+            border: none;
+            color: #fff;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: 0.3s;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .search-btn:hover { transform: rotate(90deg); box-shadow: 0 0 15px var(--primary); }
+
+        .grid-wrap {
+            flex: 1;
+            width: 100%;
+            overflow-y: auto;
+            padding: 20px 0;
+            mask-image: linear-gradient(to bottom, transparent, black 5%, black 95%, transparent);
+        }
+        .grid-wrap::-webkit-scrollbar { display: none; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            gap: 30px 10px;
+            width: 95%;
+            margin: 0 auto;
+        }
+
+        /* Simplified Card - No Background */
+        .item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 12px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            height: 90px; 
+        }
+
+        .icon-box {
+            font-size: 2.2rem;
+            color: rgba(255,255,255,0.7);
+            transition: all 0.3s;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+            display: flex; align-items: center; justify-content: center;
+            width: 60px; height: 60px;
+        }
+
+        .icon-img {
+            width: 45px; height: 45px;
+            border-radius: 12px;
+            object-fit: cover;
+            transition: 0.3s;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+
+        .item:hover .icon-box {
+            color: #fff;
+            transform: scale(1.2);
+            text-shadow: 0 0 20px var(--primary), 0 0 40px var(--accent);
+        }
+
+        .item:hover .icon-img {
+            transform: scale(1.15);
+            box-shadow: 0 0 20px rgba(255,255,255,0.4);
+        }
+
+        .item-name {
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.5);
+            font-weight: 500;
+            text-align: center;
+            width: 100%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: 0.3s;
+        }
+
+        .item:hover .item-name {
+            color: #fff;
+            text-shadow: 0 0 5px rgba(255,255,255,0.5);
+        }
+
+        .fab-settings {
+            position: fixed;
+            bottom: 30px; right: 30px;
+            width: 48px; height: 48px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            transition: 0.3s;
+            z-index: 200;
+        }
+        .fab-settings:hover { background: var(--primary); transform: rotate(180deg); }
+
+        .ctx-menu {
+            position: absolute;
+            background: rgba(20, 10, 30, 0.95);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 5px;
+            width: 120px;
+            display: none;
+            flex-direction: column;
+            z-index: 500;
+            box-shadow: 0 0 30px rgba(0,0,0,0.8);
+        }
+        .ctx-opt { padding: 10px; font-size: 0.85rem; color: #ccc; cursor: pointer; border-radius: 8px; }
+        .ctx-opt:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+        .modal-overlay {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(10px);
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0; pointer-events: none;
+            transition: 0.3s;
+            z-index: 800;
+        }
+        .modal-overlay.active { opacity: 1; pointer-events: all; }
+
+        .modal {
+            background: #111;
+            border: 1px solid #333;
+            width: 350px;
+            padding: 25px;
+            border-radius: 20px;
+            transform: scale(0.9);
+            transition: 0.3s;
+            box-shadow: 0 0 50px rgba(217, 70, 239, 0.2);
+        }
+        .modal-overlay.active .modal { transform: scale(1); }
+
+        .modal input {
+            width: 100%;
+            background: #222;
+            border: 1px solid #333;
+            padding: 10px;
+            color: #fff;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        .modal input:focus { border-color: var(--primary); }
+        .modal label { font-size: 0.8rem; color: #888; display: block; margin-bottom: 5px; }
+
+        .modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
+        .btn { padding: 8px 20px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; }
+        .btn-c { background: transparent; color: #888; border: 1px solid #333; }
+        .btn-s { background: var(--primary); color: #fff; }
+        .btn-s:hover { box-shadow: 0 0 15px var(--primary); }
+
+    </style>
+</head>
+<body>
+
+    <canvas id="star-canvas"></canvas>
+
+    <div class="container">
+        <div class="clock-wrap">
+            <div class="time" id="clock">00:00</div>
+            <div class="date" id="date">SYSTEM ONLINE</div>
+        </div>
+
+        <div class="search-container">
+            <div class="search-bar">
+                <div class="engine-icon" id="engBtn"><i class="fab fa-google"></i>
+                    <div class="engine-menu">
+                        <div class="eng-opt" onclick="app.setEng('google', 'fab fa-google')"><i class="fab fa-google"></i> Google</div>
+                        <div class="eng-opt" onclick="app.setEng('bing', 'fab fa-microsoft')"><i class="fab fa-microsoft"></i> Bing</div>
+                        <div class="eng-opt" onclick="app.setEng('yahoo', 'fab fa-yahoo')"><i class="fab fa-yahoo"></i> Yahoo</div>
+                    </div>
+                </div>
+                <input type="text" class="search-inp" id="searchInp" placeholder="Search..." autocomplete="off">
+                <button class="search-btn" id="searchBtn"><i class="fas fa-arrow-right"></i></button>
+            </div>
+        </div>
+
+        <div class="grid-wrap">
+            <div class="grid" id="grid"></div>
+        </div>
+    </div>
+
+    <div class="fab-settings" onclick="app.showDataModal()"><i class="fas fa-cog"></i></div>
+
+    <div class="ctx-menu" id="ctxMenu">
+        <div class="ctx-opt" id="ctxEdit">Edit</div>
+        <div class="ctx-opt" id="ctxDel" style="color:#ff4d4d">Delete</div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div class="modal-overlay" id="editModal">
+        <div class="modal">
+            <h3 style="margin-bottom:15px;color:#fff;">Edit Shortcut</h3>
+            <label>Name</label><input type="text" id="eName">
+            <label>URL</label><input type="text" id="eUrl">
+            <label>Icon (FontAwesome)</label><input type="text" id="eIcon" placeholder="fab fa-github">
+            <div class="modal-btns">
+                <button class="btn btn-c" onclick="app.hideModals()">Cancel</button>
+                <button class="btn btn-s" onclick="app.saveItem()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Modal -->
+    <div class="modal-overlay" id="dataModal">
+        <div class="modal">
+            <h3 style="margin-bottom:15px;color:#fff;">Settings</h3>
+            <label>Backup Filename</label>
+            <input type="text" id="backupFile" readonly>
+            <div class="modal-btns" style="justify-content:center;">
+                <button class="btn btn-c" onclick="app.export()"><i class="fas fa-download"></i> Backup</button>
+                <button class="btn btn-c" onclick="app.import()"><i class="fas fa-upload"></i> Restore</button>
+                <button class="btn btn-s" onclick="app.hideModals()">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const CFG = {
+            utcOffset: 8,
+            defaultBackupName: 'nexus_backup_v2.json',
+            engines: {
+                google: "https://www.google.com/search?q=",
+                bing: "https://www.bing.com/search?q=",
+                yahoo: "https://search.yahoo.com/search?p="
+            }
+        };
+
+        const SITES = [
+            { id: 1, name: 'Google', url: 'https://google.com', icon: 'fab fa-google' },
+            { id: 2, name: 'YouTube', url: 'https://youtube.com', icon: 'fab fa-youtube' },
+            { id: 3, name: 'X', url: 'https://twitter.com', icon: 'fab fa-x-twitter' },
+            { id: 4, name: 'Instagram', url: 'https://instagram.com', icon: 'fab fa-instagram' },
+            { id: 5, name: 'Facebook', url: 'https://facebook.com', icon: 'fab fa-facebook' },
+            { id: 6, name: 'LinkedIn', url: 'https://linkedin.com', icon: 'fab fa-linkedin' },
+            { id: 7, name: 'Reddit', url: 'https://reddit.com', icon: 'fab fa-reddit' },
+            { id: 8, name: 'ChatGPT', url: 'https://chat.openai.com', icon: 'fas fa-robot' },
+            { id: 9, name: 'GitHub', url: 'https://github.com', icon: 'fab fa-github' },
+            { id: 10, name: 'StackOverflow', url: 'https://stackoverflow.com', icon: 'fab fa-stack-overflow' },
+            { id: 11, name: 'Amazon', url: 'https://amazon.com', icon: 'fab fa-amazon' },
+            { id: 12, name: 'Netflix', url: 'https://netflix.com', icon: 'fas fa-film' },
+            { id: 13, name: 'Wikipedia', url: 'https://wikipedia.org', icon: 'fab fa-wikipedia-w' },
+            { id: 14, name: 'Gmail', url: 'https://mail.google.com', icon: 'fas fa-envelope' },
+            { id: 15, name: 'Drive', url: 'https://drive.google.com', icon: 'fab fa-google-drive' },
+            { id: 16, name: 'Twitch', url: 'https://twitch.tv', icon: 'fab fa-twitch' },
+            { id: 17, name: 'Spotify', url: 'https://open.spotify.com', icon: 'fab fa-spotify' },
+            { id: 18, name: 'WhatsApp', url: 'https://web.whatsapp.com', icon: 'fab fa-whatsapp' },
+            { id: 19, name: 'Discord', url: 'https://discord.com', icon: 'fab fa-discord' },
+            { id: 20, name: 'TikTok', url: 'https://tiktok.com', icon: 'fab fa-tiktok' },
+            { id: 21, name: 'Pinterest', url: 'https://pinterest.com', icon: 'fab fa-pinterest' },
+            { id: 22, name: 'AliExpress', url: 'https://aliexpress.com', icon: 'fas fa-shopping-bag' },
+            { id: 23, name: 'eBay', url: 'https://ebay.com', icon: 'fab fa-ebay' },
+            { id: 24, name: 'Apple', url: 'https://apple.com', icon: 'fab fa-apple' },
+            { id: 25, name: 'Booking', url: 'https://booking.com', icon: 'fas fa-suitcase' },
+            { id: 26, name: 'Airbnb', url: 'https://airbnb.com', icon: 'fab fa-airbnb' },
+            { id: 27, name: 'Telegram', url: 'https://web.telegram.org', icon: 'fab fa-telegram' },
+            { id: 28, name: 'BBC', url: 'https://bbc.com', icon: 'fas fa-globe' },
+            { id: 29, name: 'NY Times', url: 'https://nytimes.com', icon: 'fas fa-newspaper' },
+            { id: 30, name: 'SoundCloud', url: 'https://soundcloud.com', icon: 'fab fa-soundcloud' },
+            { id: 31, name: 'Bing', url: 'https://bing.com', icon: 'fab fa-microsoft' },
+            { id: 32, name: 'Figma', url: 'https://figma.com', icon: 'fab fa-figma' },
+            { id: 33, name: 'Dropbox', url: 'https://dropbox.com', icon: 'fab fa-dropbox' },
+            { id: 34, name: 'Canva', url: 'https://canva.com', icon: 'fas fa-palette' },
+            { id: 35, name: 'Notion', url: 'https://notion.so', icon: 'fas fa-cube' },
+            { id: 36, name: 'Steam', url: 'https://store.steampowered.com', icon: 'fab fa-steam' }
+        ];
+
+        const app = {
+            data: {
+                eng: localStorage.getItem('nx_eng') || 'google',
+                bms: JSON.parse(localStorage.getItem('nx_bms')) || SITES
+            },
+            ctxId: null, editId: null,
+
+            init() {
+                this.render();
+                this.startClock();
+                this.initStars();
+                this.bindEvents();
+                this.setEng(this.data.eng, this.getIcon(this.data.eng), false);
+                document.getElementById('backupFile').value = CFG.defaultBackupName;
+            },
+
+            getIcon(e) { return {google:'fab fa-google', bing:'fab fa-microsoft', yahoo:'fab fa-yahoo'}[e]; },
+
+            startClock() {
+                const tick = () => {
+                    const now = new Date();
+                    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                    const t = new Date(utc + (3600000 * CFG.utcOffset));
+                    document.getElementById('clock').innerText = t.toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit'});
+                    document.getElementById('date').innerText = t.toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric'});
+                    requestAnimationFrame(tick);
+                };
+                tick();
+            },
+
+            setEng(n, i, s=true) {
+                this.data.eng = n;
+                if(s) localStorage.setItem('nx_eng', n);
+                document.getElementById('engBtn').innerHTML = `<i class="${i}"></i>`;
+            },
+
+            search() {
+                const v = document.getElementById('searchInp').value.trim();
+                if(v) window.location.href = CFG.engines[this.data.eng] + encodeURIComponent(v);
+            },
+
+            render() {
+                const g = document.getElementById('grid');
+                g.innerHTML = '';
+                this.data.bms.forEach(b => {
+                    const el = document.createElement('div');
+                    el.className = 'item';
+                    
+                    const icon = b.icon.includes('http') 
+                        ? `<img src="${b.icon}" class="icon-img">`
+                        : `<div class="icon-box"><i class="${b.icon}"></i></div>`;
+                    
+                    el.innerHTML = `${icon}<div class="item-name">${b.name}</div>`;
+                    el.onclick = () => window.open(b.url, '_blank');
+                    el.oncontextmenu = e => { e.preventDefault(); this.openCtx(e, b.id); };
+                    g.appendChild(el);
+                });
+
+                const add = document.createElement('div');
+                add.className = 'item';
+                add.style.opacity = '0.5';
+                add.innerHTML = `<div class="icon-box"><i class="fas fa-plus"></i></div><div class="item-name">Add</div>`;
+                add.onclick = () => this.openEdit(false);
+                g.appendChild(add);
+            },
+
+            openCtx(e, id) {
+                this.ctxId = id;
+                const m = document.getElementById('ctxMenu');
+                m.style.display = 'flex';
+                m.style.top = e.clientY + 'px';
+                m.style.left = e.clientX + 'px';
+            },
+
+            openEdit(isEdit) {
+                this.editId = isEdit ? this.ctxId : null;
+                const m = document.getElementById('editModal');
+                m.classList.add('active');
+                if(isEdit) {
+                    const item = this.data.bms.find(x => x.id === this.ctxId);
+                    document.getElementById('eName').value = item.name;
+                    document.getElementById('eUrl').value = item.url;
+                    document.getElementById('eIcon').value = item.icon;
+                } else {
+                    document.getElementById('eName').value = '';
+                    document.getElementById('eUrl').value = '';
+                    document.getElementById('eIcon').value = '';
+                }
+            },
+
+            saveItem() {
+                const n = document.getElementById('eName').value;
+                let u = document.getElementById('eUrl').value;
+                const i = document.getElementById('eIcon').value || 'fas fa-link';
+                if(!n || !u) return;
+                if(!u.startsWith('http')) u = 'https://' + u;
+
+                if(this.editId) {
+                    const idx = this.data.bms.findIndex(x => x.id === this.editId);
+                    this.data.bms[idx] = { id:this.editId, name:n, url:u, icon:i };
+                } else {
+                    this.data.bms.push({ id:Date.now(), name:n, url:u, icon:i });
+                }
+                this.persist(); this.render(); this.hideModals();
+            },
+
+            del() {
+                if(confirm('Delete?')) {
+                    this.data.bms = this.data.bms.filter(x => x.id !== this.ctxId);
+                    this.persist(); this.render();
+                }
+            },
+
+            persist() { localStorage.setItem('nx_bms', JSON.stringify(this.data.bms)); },
+
+            showDataModal() { document.getElementById('dataModal').classList.add('active'); },
+            hideModals() { document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active')); },
+
+            export() {
+                const blob = new Blob([JSON.stringify(this.data.bms)], {type:'application/json'});
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = CFG.defaultBackupName;
+                a.click();
+            },
+
+            import() {
+                const i = document.createElement('input');
+                i.type = 'file';
+                i.onchange = e => {
+                    const r = new FileReader();
+                    r.onload = ev => {
+                        try {
+                            this.data.bms = JSON.parse(ev.target.result);
+                            this.persist(); this.render(); this.hideModals();
+                        } catch(e) { alert('Invalid File'); }
+                    };
+                    r.readAsText(e.target.files[0]);
+                };
+                i.click();
+            },
+
+            bindEvents() {
+                document.getElementById('searchBtn').onclick = () => this.search();
+                document.getElementById('searchInp').onkeypress = e => e.key === 'Enter' && this.search();
+                document.onclick = e => { if(!e.target.closest('.ctx-menu')) document.getElementById('ctxMenu').style.display='none'; };
+                document.getElementById('ctxEdit').onclick = () => this.openEdit(true);
+                document.getElementById('ctxDel').onclick = () => this.del();
+            },
+
+            initStars() {
+                const c = document.getElementById('star-canvas');
+                const ctx = c.getContext('2d');
+                let w, h, stars = [];
+                const m = {x:0, y:0};
+
+                const resize = () => { w = c.width = window.innerWidth; h = c.height = window.innerHeight; };
+                window.onresize = resize; resize();
+                window.onmousemove = e => { m.x = e.clientX; m.y = e.clientY; };
+
+                class Star {
+                    constructor() { this.init(); }
+                    init() { 
+                        this.x = Math.random() * w; 
+                        this.y = Math.random() * h; 
+                        this.vx = (Math.random() - 0.5) * 0.5; 
+                        this.vy = (Math.random() - 0.5) * 0.5; 
+                        this.r = Math.random() * 2; 
+                    }
+                    update() {
+                        this.x += this.vx; this.y += this.vy;
+                        if(this.x < 0 || this.x > w) this.vx *= -1;
+                        if(this.y < 0 || this.y > h) this.vy *= -1;
+                    }
+                    draw() {
+                        ctx.fillStyle = `rgba(0, 243, 255, ${Math.random() * 0.5 + 0.3})`;
+                        ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2); ctx.fill();
+                    }
+                }
+
+                for(let i=0; i<120; i++) stars.push(new Star());
+
+                const animate = () => {
+                    ctx.clearRect(0, 0, w, h);
+                    stars.forEach(s => {
+                        s.update();
+                        s.draw();
+                        const dist = Math.hypot(s.x - m.x, s.y - m.y);
+                        if(dist < 180) {
+                            ctx.strokeStyle = `rgba(217, 70, 239, ${1 - dist / 180})`;
+                            ctx.lineWidth = 0.8;
+                            ctx.beginPath();
+                            ctx.moveTo(s.x, s.y);
+                            ctx.lineTo(m.x, m.y);
+                            ctx.stroke();
+                        }
+                    });
+                    requestAnimationFrame(animate);
+                };
+                animate();
+            }
+        };
+
+        window.onload = () => app.init();
+    </script>
+</body>
+</html>
