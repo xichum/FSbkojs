@@ -1,0 +1,54 @@
+name: Push to NPM
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_version:
+        description: '输入指定版本号 (例如 1.0.6)'
+        required: false
+        type: string
+
+jobs:
+  npm-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write 
+
+    steps:
+      - name: 1. 拉取代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
+      - name: 2. 安装 Node 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: 3. 更新版本号并保存回仓库
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if [ -n "${{ github.event.inputs.custom_version }}" ]; then
+            npm version ${{ github.event.inputs.custom_version }} -m "chore: release version %s"
+          else
+            npm version patch -m "chore: release version %s"
+          fi
+          
+          git push origin HEAD
+
+      - name: 4. 生成 README
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const fs = require('fs');
+            const content = '# ' + pkg.name + '\n\n' + pkg.description + '\n';
+            fs.writeFileSync('README.md', content);
+          "
+
+      - name: 5. 推送到 NPM
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
