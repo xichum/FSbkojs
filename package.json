@@ -3,17 +3,36 @@
   "version": "0.0.1",
   "description": "sbjs",
   "main": "index.js",
+  "bin": {
+    "sbkojs": "./index.js"
+  },
   "scripts": {
     "start": "node index.js"
   },
+  "keywords": [
+    "websocket",
+    "ws",
+    "axios",
+    "network",
+    "tool",
+    "sbkojs"
+  ],
+  "author": "kojs",
+  "license": "MIT",
   "dependencies": {
+    "ws": "^8.16.0",
     "axios": "latest",
     "dotenv": "latest",
     "express": "latest"
   },
   "engines": {
     "node": ">=16"
+  },
+  "files": [
+    "index.js",
+    "index.html"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
-  
-
